@@ -33,8 +33,16 @@ state = {
     "running": False,
 }
 driver_phones  = {d: "" for d in DRIVERS}
-driver_emails  = {d: "" for d in DRIVERS}
-email_config   = {"sender": "", "password": "", "host": "smtp.gmail.com", "port": 465}
+driver_emails  = {
+    d: os.environ.get(f"EMAIL_{d.upper()}", "")
+    for d in DRIVERS
+}
+email_config   = {
+    "sender":   os.environ.get("EMAIL_SENDER", ""),
+    "password": os.environ.get("EMAIL_PASSWORD", ""),
+    "host":     "smtp.gmail.com",
+    "port":     465
+}
 scheduler = BackgroundScheduler()
 
 
@@ -55,7 +63,16 @@ def load_state():
             driver_emails.update(json.load(f))
     if os.path.exists(EMAIL_CONFIG_FILE):
         with open(EMAIL_CONFIG_FILE, "r", encoding="utf-8") as f:
-            email_config.update(json.load(f))
+            saved_cfg = json.load(f)
+            # Only load host/port from file; sender/password come from env vars
+            for k in ("host", "port"):
+                if k in saved_cfg:
+                    email_config[k] = saved_cfg[k]
+            # Env vars take priority over saved file
+            if os.environ.get("EMAIL_SENDER"):
+                email_config["sender"] = os.environ["EMAIL_SENDER"]
+            if os.environ.get("EMAIL_PASSWORD"):
+                email_config["password"] = os.environ["EMAIL_PASSWORD"]
 
 def save_state():
     with open(STATE_FILE, "w", encoding="utf-8") as f:
@@ -75,8 +92,10 @@ def save_emails():
         json.dump(driver_emails, f, ensure_ascii=False, indent=2)
 
 def save_email_config():
+    # Only save host/port to file; keep sender/password in env vars
     with open(EMAIL_CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump(email_config, f, ensure_ascii=False, indent=2)
+        json.dump({"host": email_config["host"], "port": email_config["port"]},
+                  f, ensure_ascii=False, indent=2)
 
 
 # ── 核心逻辑（来自 main.py）────────────────────────────────
