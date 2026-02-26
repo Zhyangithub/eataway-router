@@ -659,18 +659,25 @@ async function sendEmail(driver) {
   const btn = event.target;
   btn.textContent = '...';
   btn.style.opacity = '.5';
-  const res = await fetch(`/api/send-email/${driver}`, {method:'POST'});
-  const d = await res.json();
-  btn.textContent = d.ok ? '✓ Skickat' : '✗ Fel';
-  btn.style.color = d.ok ? 'var(--ok)' : 'var(--err)';
-  if (!d.ok) {
-    console.error(d.msg);
-    alert('Email-fel:\n' + d.msg);
+  try {
+    const res = await fetch(`/api/send-email/${driver}`, {method:'POST'});
+    const text = await res.text();
+    console.log('Email response:', text);
+    let d;
+    try { d = JSON.parse(text); }
+    catch(e) { throw new Error('Server error (500):\n' + text.slice(0, 300)); }
+    btn.textContent = d.ok ? '✓ Skickat' : '✗ Fel';
+    btn.style.color = d.ok ? 'var(--ok)' : 'var(--err)';
+    if (!d.ok) alert('Email-fel:\n' + (d.msg || 'Okänt fel'));
+  } catch(e) {
+    btn.textContent = '✗ Fel';
+    btn.style.color = 'var(--err)';
+    alert('Email-fel:\n' + e.message);
   }
   setTimeout(() => {
     btn.textContent = '@ Email';
     btn.style.color = ''; btn.style.opacity = '';
-  }, 3000);
+  }, 4000);
 }
 
 async function sendAllEmail() {
