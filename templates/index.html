@@ -386,17 +386,26 @@ async function savePhones() {
 function buildWAMessage(driver, r) {
   const date = currentData?.generated_at || '—';
   const base = window.location.origin;
-  // Send a short link to the driver's personal route page — no long URLs in message
   const pageUrl = `${base}/links/${driver}`;
-  return `🚛 *Körorder ${driver}* — ${date}\n📦 ${r.store_count || r.stores?.length} butiker | ⏱ ${r.duration || '–'} | 📍 ${r.distance || '–'}\n\nÖppna din ruttlänk här:\n${pageUrl}\n\n✅ Ha en bra dag!`;
+  // Plain text only — no emoji (causes encoding issues in some WhatsApp clients)
+  return `*Kororder ${driver}* - ${date}\n${r.store_count || r.stores?.length} butiker | ${r.duration || '-'} | ${r.distance || '-'}\n\nOppna din ruttlank har:\n${pageUrl}\n\nHa en bra dag!`;
+}
+
+function cleanPhone(raw) {
+  // Remove spaces, dashes, plus signs
+  let p = raw.replace(/[\s\-\+]/g, '');
+  // If starts with 0, replace with Swedish country code 46
+  if (p.startsWith('0')) p = '46' + p.slice(1);
+  return p;
 }
 
 function openWA(driver, r) {
-  const phone = currentData?.phones?.[driver];
-  if (!phone) return alert(`Inget telefonnummer för ${driver}. Lägg till i konfigurationen ovan.`);
+  const raw = currentData?.phones?.[driver];
+  if (!raw) return alert(`Inget telefonnummer för ${driver}. Lägg till i konfigurationen ovan.`);
+  const phone = cleanPhone(raw);
   const msg = encodeURIComponent(buildWAMessage(driver, r));
-  // wa.me requires the app installed; web.whatsapp.com works in any browser
-  window.open(`https://web.whatsapp.com/send?phone=${phone}&text=${msg}`, '_blank');
+  // Use api.whatsapp.com/send — works both in browser and opens app if installed
+  window.open(`https://api.whatsapp.com/send/?phone=${phone}&text=${msg}&type=phone_number&app_absent=0`, '_blank');
 }
 
 function sendAllWA() {
