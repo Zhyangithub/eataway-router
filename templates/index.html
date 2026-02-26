@@ -79,6 +79,16 @@
   }
   .btn-wa-sm:hover { background: rgba(37,211,102,.15); border-color: var(--wa); }
   .btn-wa-sm.no-phone { opacity: .35; pointer-events: none; }
+  .btn-email-sm {
+    font-family: var(--mono); font-size: .65rem; padding: .3rem .7rem;
+    border: 1px solid rgba(56,189,248,.4); background: rgba(56,189,248,.06);
+    color: var(--blue); cursor: pointer; transition: all .15s; border-radius: 2px;
+    text-decoration: none; display: inline-flex; align-items: center; gap: .3rem;
+  }
+  .btn-email-sm:hover { background: rgba(56,189,248,.15); border-color: var(--blue); }
+  .btn-email-sm.no-email { opacity: .35; pointer-events: none; }
+  .btn-email    { background: transparent; color: var(--blue); border: 1px solid var(--blue); }
+  .btn-email:disabled { opacity: .4; cursor: not-allowed; }
 
   .schedule-widget {
     display: flex; align-items: center; gap: .5rem;
@@ -249,6 +259,7 @@
 
     <button class="btn btn-export" id="btn-export" onclick="exportExcel()" disabled>↓ Exportera Excel</button>
     <button class="btn btn-wa"     id="btn-wa-all"  onclick="sendAllWA()"    disabled>✉ Skicka alla WhatsApp</button>
+    <button class="btn btn-email"  id="btn-email-all" onclick="sendAllEmail()" disabled>@ Skicka alla Email</button>
   </div>
 
   <!-- Status strip -->
@@ -271,6 +282,40 @@
     </div>
   </div>
 
+
+  <!-- Email config panel -->
+  <div class="phone-panel" style="border-color:rgba(56,189,248,.2)">
+    <div class="phone-panel-header" onclick="toggleEmailPanel(this)">
+      <span class="phone-panel-title" style="color:var(--blue)">@ E-post konfiguration</span>
+      <span style="font-family:var(--mono);font-size:.7rem;color:var(--muted);">▼ klicka för att konfigurera</span>
+    </div>
+    <div class="phone-panel-body" id="email-panel-body">
+      <!-- SMTP config -->
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px 16px;margin-bottom:14px">
+        <div style="font-family:var(--mono);font-size:.7rem;color:var(--blue);margin-bottom:10px;letter-spacing:.1em">SMTP-INSTÄLLNINGAR (Gmail)</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+          <div class="phone-row">
+            <label class="phone-label">Avsändaradress</label>
+            <input class="phone-input" type="email" id="cfg-sender" placeholder="ditt@gmail.com">
+          </div>
+          <div class="phone-row">
+            <label class="phone-label">App-lösenord (Gmail)</label>
+            <input class="phone-input" type="password" id="cfg-password" placeholder="xxxx xxxx xxxx xxxx">
+          </div>
+        </div>
+        <div style="display:flex;gap:10px;align-items:center">
+          <button class="btn btn-secondary" style="font-size:.8rem;padding:.4rem 1rem" onclick="saveEmailConfig()">💾 Spara SMTP</button>
+          <span id="smtp-saved" style="font-family:var(--mono);font-size:.7rem;color:var(--ok);display:none">✓ Sparat</span>
+          <span style="font-family:var(--mono);font-size:.65rem;color:var(--muted)">Gmail: aktivera 2FA → App-lösenord</span>
+        </div>
+      </div>
+      <!-- Driver emails -->
+      <p class="phone-hint">E-postadresser per chaufför:</p>
+      <div class="phone-grid" id="email-grid"></div>
+      <button class="btn btn-secondary" style="font-size:.8rem;padding:.4rem 1rem" onclick="saveDriverEmails()">💾 Spara adresser</button>
+      <span id="emails-saved" style="font-family:var(--mono);font-size:.7rem;color:var(--ok);margin-left:.8rem;display:none">✓ Sparat</span>
+    </div>
+  </div>
   <!-- Driver cards -->
   <div class="drivers-grid" id="drivers-grid">
     <div class="empty-state">
@@ -442,10 +487,12 @@ function render(data) {
 
   loadScheduleTime(schedule_hour, schedule_minute);
   if (drivers) buildPhoneGrid(drivers, phones || {});
+  if (drivers) buildEmailGrid(drivers, data.emails || {});
 
   const hasResults = Object.keys(results || {}).length > 0;
-  document.getElementById('btn-export').disabled  = !hasResults;
-  document.getElementById('btn-wa-all').disabled  = !hasResults;
+  document.getElementById('btn-export').disabled    = !hasResults;
+  document.getElementById('btn-wa-all').disabled    = !hasResults;
+  document.getElementById('btn-email-all').disabled = !hasResults;
   document.getElementById('btn-generate').disabled = running;
   document.getElementById('btn-generate').innerHTML = running
     ? '<span class="spinner"></span> Kör...' : '▶ Generera Nu';
@@ -484,6 +531,9 @@ function renderCard(driver, r, delay, phone) {
   const badgeText   = isOk ? 'KLAR' : (r.status === 'error' ? 'FEL' : 'VÄNTAR');
   const drvId = 'DRV-' + driver.toUpperCase().slice(0,3) + String(driver.length * 7 % 99).padStart(2,'0');
 
+  const emailBtn = isOk ? `
+    <button class="btn-email-sm ${(currentData?.emails?.[driver] || '') ? '' : 'no-email'}"
+       onclick="sendEmail('${driver}')">@ Email</button>` : '';
   const waBtn = isOk ? `
     <a class="btn-wa-sm ${phone ? '' : 'no-phone'}"
        href="#" onclick="event.preventDefault();openWA('${driver}',currentData.results['${driver}'])">
@@ -532,6 +582,7 @@ function renderCard(driver, r, delay, phone) {
       <div class="card-header">
         <div><div class="driver-name">${driver}</div><div class="driver-id">${drvId}</div></div>
         <div class="card-header-right">
+          ${emailBtn}
           ${waBtn}
           <span class="status-badge ${badgeClass}">${badgeText}</span>
         </div>
@@ -557,12 +608,94 @@ function setStatus(type, msg) {
   dot.style.animation   = type === 'running' ? 'pulse 1s infinite' : 'none';
 }
 
+
+// ── Email ──
+function toggleEmailPanel(header) {
+  header.classList.toggle('open');
+  document.getElementById('email-panel-body').classList.toggle('open');
+}
+
+function buildEmailGrid(drivers, emails) {
+  const grid = document.getElementById('email-grid');
+  if (!grid) return;
+  grid.innerHTML = drivers.map(d => `
+    <div class="phone-row">
+      <label class="phone-label">${d}</label>
+      <input class="phone-input" type="email" id="email-${d}"
+             value="${emails[d] || ''}" placeholder="chauffor@gmail.com">
+    </div>`).join('');
+}
+
+async function saveEmailConfig() {
+  const sender   = document.getElementById('cfg-sender').value.trim();
+  const password = document.getElementById('cfg-password').value.trim();
+  await fetch('/api/email-config', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({sender, password})
+  });
+  const el = document.getElementById('smtp-saved');
+  el.style.display = 'inline';
+  setTimeout(() => el.style.display = 'none', 2000);
+}
+
+async function saveDriverEmails() {
+  const emails = {};
+  (currentData?.drivers || []).forEach(d => {
+    emails[d] = document.getElementById(`email-${d}`)?.value.trim() || '';
+  });
+  await fetch('/api/emails', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify(emails)
+  });
+  currentData.emails = emails;
+  const el = document.getElementById('emails-saved');
+  el.style.display = 'inline';
+  setTimeout(() => el.style.display = 'none', 2000);
+}
+
+async function sendEmail(driver) {
+  const btn = event.target;
+  btn.textContent = '...';
+  btn.style.opacity = '.5';
+  const res = await fetch(`/api/send-email/${driver}`, {method:'POST'});
+  const d = await res.json();
+  btn.textContent = d.ok ? '✓ Skickat' : '✗ Fel';
+  btn.style.color = d.ok ? 'var(--ok)' : 'var(--err)';
+  if (!d.ok) console.error(d.msg);
+  setTimeout(() => {
+    btn.textContent = '@ Email';
+    btn.style.color = ''; btn.style.opacity = '';
+  }, 3000);
+}
+
+async function sendAllEmail() {
+  const btn = document.getElementById('btn-email-all');
+  btn.disabled = true;
+  btn.textContent = '@ Skickar...';
+  const res = await fetch('/api/send-email-all', {method:'POST'});
+  const data = await res.json();
+  const errs = Object.entries(data).filter(([,v]) => !v.ok);
+  btn.textContent = errs.length ? `@ ${errs.length} fel` : '@ Alla skickade!';
+  btn.style.color = errs.length ? 'var(--err)' : 'var(--ok)';
+  setTimeout(() => {
+    btn.textContent = '@ Skicka alla Email';
+    btn.style.color = ''; btn.disabled = false;
+  }, 4000);
+}
+
 // ── Init ──
 (async () => {
   const data = await fetch('/api/status').then(r => r.json());
   currentData = data;
   render(data);
   if (data.running) startPolling();
+  // Load SMTP sender (not password)
+  try {
+    const cfg = await fetch('/api/email-config').then(r => r.json());
+    if (cfg.sender) document.getElementById('cfg-sender').value = cfg.sender;
+  } catch(e) {}
 })();
 </script>
 </body>

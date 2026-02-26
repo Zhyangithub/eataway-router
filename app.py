@@ -4,7 +4,9 @@
 from flask import Flask, jsonify, render_template, request, send_file
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
-import json, os, io, urllib.parse, threading
+import json, os, io, urllib.parse, threading, smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from datetime import datetime
 import pandas as pd
 import requests as http_requests
@@ -19,7 +21,9 @@ WAREHOUSE_COORD = "59.8542194,17.6650221"
 DRIVERS        = ["Abbe", "Saman", "Sarkis", "Cornelia", "Pawlos"]
 
 STATE_FILE  = "last_results.json"
-PHONES_FILE = "driver_phones.json"
+PHONES_FILE  = "driver_phones.json"
+EMAILS_FILE  = "driver_emails.json"
+EMAIL_CONFIG_FILE = "email_config.json"
 
 state = {
     "results": {},
@@ -28,7 +32,9 @@ state = {
     "schedule_minute": 0,
     "running": False,
 }
-driver_phones = {d: "" for d in DRIVERS}
+driver_phones  = {d: "" for d in DRIVERS}
+driver_emails  = {d: "" for d in DRIVERS}
+email_config   = {"sender": "", "password": "", "host": "smtp.gmail.com", "port": 587}
 scheduler = BackgroundScheduler()
 
 
@@ -44,6 +50,12 @@ def load_state():
     if os.path.exists(PHONES_FILE):
         with open(PHONES_FILE, "r", encoding="utf-8") as f:
             driver_phones.update(json.load(f))
+    if os.path.exists(EMAILS_FILE):
+        with open(EMAILS_FILE, "r", encoding="utf-8") as f:
+            driver_emails.update(json.load(f))
+    if os.path.exists(EMAIL_CONFIG_FILE):
+        with open(EMAIL_CONFIG_FILE, "r", encoding="utf-8") as f:
+            email_config.update(json.load(f))
 
 def save_state():
     with open(STATE_FILE, "w", encoding="utf-8") as f:
@@ -57,6 +69,14 @@ def save_state():
 def save_phones():
     with open(PHONES_FILE, "w", encoding="utf-8") as f:
         json.dump(driver_phones, f, ensure_ascii=False, indent=2)
+
+def save_emails():
+    with open(EMAILS_FILE, "w", encoding="utf-8") as f:
+        json.dump(driver_emails, f, ensure_ascii=False, indent=2)
+
+def save_email_config():
+    with open(EMAIL_CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump(email_config, f, ensure_ascii=False, indent=2)
 
 
 # ── 核心逻辑（来自 main.py）────────────────────────────────
@@ -229,6 +249,7 @@ def api_status():
         "running":         state["running"],
         "drivers":         DRIVERS,
         "phones":          driver_phones,
+        "emails":          driver_emails,
     })
 
 
@@ -385,6 +406,138 @@ def driver_links(driver_name):
   </div>
 </body></html>"""
 
+
+
+def build_email_html(driver, r, base_url):
+    date = state.get("generated_at", "—")
+    page_url = f"{base_url}/links/{driver}"
+    stores_html = "".join(
+        f'<tr><td style="padding:6px 12px;color:#f5a623;width:30px">{i+1}</td>'
+        f'<td style="padding:6px 12px">{s}</td></tr>'
+        for i, s in enumerate(r.get("stores", []))
+    )
+    link_btns = "".join(
+        f'<a href="{u}" style="display:block;margin:8px 0;padding:12px 16px;'
+        f'background:#1a73e8;color:#fff;text-decoration:none;border-radius:6px;'
+        f'font-size:14px;font-weight:600;text-align:center">Segment {i+1} — Oppna Google Maps</a>'
+        for i, u in enumerate(r.get("urls", []))
+    )
+    return f"""<!DOCTYPE html>
+<html><head><meta charset="UTF-8"></head>
+<body style="font-family:-apple-system,sans-serif;background:#f5f5f5;margin:0;padding:20px">
+  <div style="max-width:520px;margin:0 auto;background:#fff;border-radius:10px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.1)">
+    <div style="background:#0f111a;padding:20px 24px">
+      <div style="font-size:22px;font-weight:800;color:#fff">Kororder — {driver}</div>
+      <div style="font-size:13px;color:#6b7a99;margin-top:4px">Genererad: {date}</div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);border-bottom:1px solid #eee">
+      <div style="padding:16px;text-align:center;border-right:1px solid #eee">
+        <div style="font-size:24px;font-weight:700;color:#f5a623">{r.get("store_count","—")}</div>
+        <div style="font-size:11px;color:#999;text-transform:uppercase">Butiker</div>
+      </div>
+      <div style="padding:16px;text-align:center;border-right:1px solid #eee">
+        <div style="font-size:24px;font-weight:700;color:#f5a623">{r.get("duration","—")}</div>
+        <div style="font-size:11px;color:#999;text-transform:uppercase">Est. tid</div>
+      </div>
+      <div style="padding:16px;text-align:center">
+        <div style="font-size:24px;font-weight:700;color:#f5a623">{r.get("distance","—")}</div>
+        <div style="font-size:11px;color:#999;text-transform:uppercase">Distans</div>
+      </div>
+    </div>
+    <div style="padding:20px 24px">
+      <div style="font-size:11px;color:#999;text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">Navigationslänkar</div>
+      {link_btns}
+      <div style="margin-top:16px">
+        <a href="{page_url}" style="display:block;padding:12px 16px;background:#f0f7ff;color:#1a73e8;
+           text-decoration:none;border-radius:6px;font-size:13px;text-align:center;border:1px solid #c8dffe">
+          Oppna fullstandig ruttlank
+        </a>
+      </div>
+      <div style="margin-top:20px">
+        <div style="font-size:11px;color:#999;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Korordning</div>
+        <table style="width:100%;border-collapse:collapse;font-size:13px">{stores_html}</table>
+      </div>
+    </div>
+    <div style="background:#f9f9f9;padding:14px 24px;border-top:1px solid #eee;font-size:12px;color:#999;text-align:center">
+      RouteOps — Uppsala Warehouse
+    </div>
+  </div>
+</body></html>"""
+
+
+def send_email_to_driver(driver, r, base_url):
+    to_addr = driver_emails.get(driver, "").strip()
+    if not to_addr:
+        return False, "Ingen e-postadress"
+    sender   = email_config.get("sender", "").strip()
+    password = email_config.get("password", "").strip()
+    if not sender or not password:
+        return False, "E-postkonfiguration saknas"
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = f"Kororder {driver} — {state.get('generated_at','')}"
+        msg["From"]    = sender
+        msg["To"]      = to_addr
+        html = build_email_html(driver, r, base_url)
+        msg.attach(MIMEText(html, "html", "utf-8"))
+        with smtplib.SMTP(email_config.get("host", "smtp.gmail.com"),
+                          int(email_config.get("port", 587))) as srv:
+            srv.starttls()
+            srv.login(sender, password)
+            srv.sendmail(sender, to_addr, msg.as_bytes())
+        return True, "Skickat"
+    except Exception as e:
+        return False, str(e)
+
+
+@app.route("/api/emails", methods=["POST"])
+def api_set_emails():
+    for driver, addr in request.json.items():
+        if driver in driver_emails:
+            driver_emails[driver] = str(addr).strip()
+    save_emails()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/email-config", methods=["POST"])
+def api_set_email_config():
+    data = request.json
+    for k in ("sender", "password", "host", "port"):
+        if k in data:
+            email_config[k] = data[k]
+    save_email_config()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/email-config", methods=["GET"])
+def api_get_email_config():
+    # Don't expose password
+    return jsonify({k: v if k != "password" else ("••••••" if v else "")
+                    for k, v in email_config.items()})
+
+
+@app.route("/api/send-email/<driver_name>", methods=["POST"])
+def api_send_email_one(driver_name):
+    r = state["results"].get(driver_name)
+    if not r or r.get("status") != "ok":
+        return jsonify({"ok": False, "msg": "Inga rutter"}), 400
+    base = request.host_url.rstrip("/")
+    ok, msg = send_email_to_driver(driver_name, r, base)
+    return jsonify({"ok": ok, "msg": msg})
+
+
+@app.route("/api/send-email-all", methods=["POST"])
+def api_send_email_all():
+    results_out = {}
+    base = request.host_url.rstrip("/")
+    for driver in DRIVERS:
+        r = state["results"].get(driver)
+        if r and r.get("status") == "ok":
+            ok, msg = send_email_to_driver(driver, r, base)
+            results_out[driver] = {"ok": ok, "msg": msg}
+        else:
+            results_out[driver] = {"ok": False, "msg": "Inga rutter"}
+    return jsonify(results_out)
 
 # ── 启动 ─────────────────────────────────────────────────────
 # 启动时始终加载状态和调度器（gunicorn 也需要）
