@@ -497,6 +497,9 @@ def send_email_to_driver(driver, r, base_url):
                 srv.sendmail(sender, to_addr, msg.as_bytes())
         return True, "Skickat"
     except Exception as e:
+        import traceback
+        err_detail = traceback.format_exc()
+        print(f"[EMAIL ERROR] {driver}: {err_detail}")
         return False, str(e)
 
 
@@ -533,6 +536,7 @@ def api_send_email_one(driver_name):
         return jsonify({"ok": False, "msg": "Inga rutter"}), 400
     base = request.host_url.rstrip("/")
     ok, msg = send_email_to_driver(driver_name, r, base)
+    print(f"[EMAIL] {driver_name}: ok={ok} msg={msg}")
     return jsonify({"ok": ok, "msg": msg})
 
 

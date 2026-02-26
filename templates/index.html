@@ -663,7 +663,10 @@ async function sendEmail(driver) {
   const d = await res.json();
   btn.textContent = d.ok ? '✓ Skickat' : '✗ Fel';
   btn.style.color = d.ok ? 'var(--ok)' : 'var(--err)';
-  if (!d.ok) console.error(d.msg);
+  if (!d.ok) {
+    console.error(d.msg);
+    alert('Email-fel:\n' + d.msg);
+  }
   setTimeout(() => {
     btn.textContent = '@ Email';
     btn.style.color = ''; btn.style.opacity = '';
