@@ -165,7 +165,9 @@ def optimize_route(stores):
         route  = data['routes'][0]
         order  = route['waypoint_order']
         legs   = route['legs']
-        dur_s  = sum(l['duration']['value']  for l in legs)
+        dur_s = sum(
+            l.get('duration_in_traffic', l['duration'])['value'] 
+            for l in legs)
         dist_m = sum(l['distance']['value']  for l in legs)
         return [stores[i] for i in order], {
             "duration_min": round(dur_s / 60),
