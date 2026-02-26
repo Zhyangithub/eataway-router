@@ -395,7 +395,8 @@ function openWA(driver, r) {
   const phone = currentData?.phones?.[driver];
   if (!phone) return alert(`Inget telefonnummer för ${driver}. Lägg till i konfigurationen ovan.`);
   const msg = encodeURIComponent(buildWAMessage(driver, r));
-  window.open(`https://wa.me/${phone}?text=${msg}`, '_blank');
+  // wa.me requires the app installed; web.whatsapp.com works in any browser
+  window.open(`https://web.whatsapp.com/send?phone=${phone}&text=${msg}`, '_blank');
 }
 
 function sendAllWA() {
