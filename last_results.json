@@ -1,0 +1,178 @@
+{
+  "results": {
+    "Abbe": {
+      "status": "ok",
+      "stores": [
+        "Tempo Nacka",
+        "Coop Matboden",
+        "Direkten Nacka strand",
+        "Coop Bondegatan",
+        "Coop Hammarby Sjöstad",
+        "Coop Sockenplan",
+        "MyWay Gubbängen",
+        "Coop Gubbängen",
+        "Ica Högdalen",
+        "Coop Högdalen",
+        "Ica Supermarket Hagsätra",
+        "Coop Stuvsta",
+        "Ica Nära Stuvsta",
+        "Mr Rabb",
+        "Coop Huddinge",
+        "ICA Huddinge",
+        "Coop farsta strand",
+        "Coop farsta centrum",
+        "Coop Skarpnäck",
+        "Coop Bagarmossen",
+        "Coop Björkhagen"
+      ],
+      "store_count": 21,
+      "urls": [
+        "https://www.google.com/maps/dir/?api=1&origin=59.8542194,17.6650221&destination=59.263838,18.0404146&waypoints=59.3078526%2C18.1380715%7C59.3114499%2C18.2007338%7C59.31653497127535%2C18.160415798346445%7C59.3135148%2C18.0928117%7C59.3025381%2C18.1027484%7C59.28293797886226%2C18.073051599682206%7C59.2640081%2C18.082121%7C59.2623173%2C18.0829918%7C59.263352825493776%2C18.043064052309088",
+        "https://www.google.com/maps/dir/?api=1&origin=59.263838,18.0404146&destination=59.2765118,18.1326097&waypoints=59.2622826%2C18.0136771%7C59.25080781281203%2C18.01060002717933%7C59.25208535015867%2C17.998276867653416%7C59.23530206975631%2C17.982046256014865%7C59.236406881230195%2C17.98077985601488%7C59.24093550256938%2C17.99541425601519%7C59.23520725799116%2C18.102172113687345%7C59.243069182074265%2C18.09139216950652%7C59.2662624%2C18.1355037",
+        "https://www.google.com/maps/dir/?api=1&origin=59.2765118,18.1326097&destination=59.8542194,17.6650221&waypoints=59.2902506%2C18.1167029"
+      ],
+      "duration": "269 min",
+      "distance": "219.4 km",
+      "unmatched": [],
+      "unmatched_count": 0
+    },
+    "Saman": {
+      "status": "ok",
+      "stores": [
+        "Coop SVANDAMMSPLAN",
+        "X-tra Aspudden",
+        "Coop Mälarhöjden",
+        "Coop Västertorp",
+        "Fresha segeltorp",
+        "Vivo ellbe",
+        "Coop Folkparken",
+        "Coop Södertälje",
+        "Coop rönninge",
+        "ICA Supermarket solbo",
+        "Ica Maxi Botkyrka",
+        "Supergrossen Hallunda",
+        "ICA nära Vårby gård",
+        "Prisma Skärholmen",
+        "Coop Älvsjötorg",
+        "Coop Storsjövägen",
+        "ICA Nära Årsta",
+        "Ica Essingen",
+        "Coop Kristineberg"
+      ],
+      "store_count": 19,
+      "urls": [
+        "https://www.google.com/maps/dir/?api=1&origin=59.8542194,17.6650221&destination=59.18981308941077,17.822003425322723&waypoints=59.30129125880926%2C18.00451807826129%7C59.30547760776281%2C17.993389786708168%7C59.3013363%2C17.9573086%7C59.29279728471902%2C17.967702598345248%7C59.27166881660488%2C17.953728925326814%7C59.21109762779813%2C17.63131069834122%7C59.194077434617164%2C17.64283523696071%7C59.18756199592625%2C17.574132798340035%7C59.19399559349224%2C17.74740018299544",
+        "https://www.google.com/maps/dir/?api=1&origin=59.18981308941077,17.822003425322723&destination=59.8542194,17.6650221&waypoints=59.2373955%2C17.8321908%7C59.244544982209895%2C17.828214213687758%7C59.26411737422678%2C17.88434833696418%7C59.27686418115569%2C17.9049156523097%7C59.27930852587509%2C18.00960081368949%7C59.2993312%2C18.0426395%7C59.2977933%2C18.0632859%7C59.324743%2C18.0076742%7C59.33324046333594%2C18.002095440674807"
+      ],
+      "duration": "273 min",
+      "distance": "256.5 km",
+      "unmatched": [],
+      "unmatched_count": 0
+    },
+    "Sarkis": {
+      "status": "ok",
+      "stores": [
+        "Coop Sundbypark",
+        "Coop Bromsten",
+        "Stora Coop Spånga",
+        "Coop Spånga Torg",
+        "Ica Supermarket Spånga",
+        "Coop Spångavägen",
+        "Ica Bromma",
+        "Coop Bromma",
+        "Coop Mineberg",
+        "Coop Traneberg",
+        "Coop Brommaplan",
+        "Hemköp blackeberg",
+        "Coop Björnboda",
+        "ICA Nära Söderhöjden",
+        "Coop Veckovägen",
+        "Stora Coop Barkarby",
+        "Coop Kungsängen",
+        "Coop Tibble"
+      ],
+      "store_count": 18,
+      "urls": [
+        "https://www.google.com/maps/dir/?api=1&origin=59.8542194,17.6650221&destination=59.33543023658645,17.96963900020099&waypoints=59.3789387%2C17.9650386%7C59.3793678%2C17.9140886%7C59.37874145287527%2C17.9066983094711%7C59.381753015909396%2C17.89736407270458%7C59.3821138%2C17.8977885%7C59.3679316%2C17.900451%7C59.356474%2C17.9114199%7C59.35681311307841%2C17.952855419320024%7C59.33943949679218%2C17.989471756019988",
+        "https://www.google.com/maps/dir/?api=1&origin=59.33543023658645,17.96963900020099&destination=59.8542194,17.6650221&waypoints=59.338776943133254%2C17.93944114067507%7C59.347573603483674%2C17.884317167658132%7C59.379238394106814%2C17.848325081151085%7C59.41663%2C17.84027%7C59.42399268387215%2C17.823467475076352%7C59.4431024%2C17.8336732%7C59.49594746323389%2C17.742885518411274%7C59.4854105%2C17.7340642"
+      ],
+      "duration": "206 min",
+      "distance": "186.2 km",
+      "unmatched": [],
+      "unmatched_count": 0
+    },
+    "Cornelia": {
+      "status": "ok",
+      "stores": [
+        "ICA Nära Lindholmen",
+        "Ica Dragonen",
+        "Ica Gribbylund",
+        "ICA kvantum Danderyd",
+        "Ica Myran",
+        "Myway Danderyd",
+        "Coop Bergshamra",
+        "Tempo Bageby",
+        "Ica Kvantum Lidingö",
+        "Coop Skeppet",
+        "Ica Gärdet Rökubbsgatan",
+        "Ica Nära Gärdet",
+        "Coop Garnisonen",
+        "Coop Storgatan",
+        "Coop Erik Dahlbersgatan",
+        "The Coffice KTH",
+        "Franzéns Livs",
+        "Daniel tobak affären (enbart tisdagar)",
+        "ICA kvantum Sollentuna"
+      ],
+      "store_count": 19,
+      "urls": [
+        "https://www.google.com/maps/dir/?api=1&origin=59.8542194,17.6650221&destination=59.3662224,18.1350569&waypoints=59.58941473041212%2C18.107150456032514%7C59.46595038260956%2C18.04475837507842%7C59.46228607467894%2C18.09000615365646%7C59.39850189969559%2C18.03673779783439%7C59.3971141%2C18.0442327%7C59.3914001%2C18.0432956%7C59.3812296%2C18.0354135%7C59.3547330%2C18.1331064%7C59.3496136%2C18.1461765",
+        "https://www.google.com/maps/dir/?api=1&origin=59.3662224,18.1350569&destination=59.8542194,17.6650221&waypoints=59.3451741%2C18.1105641%7C59.3466171%2C18.0999424%7C59.3359164%2C18.0973855%7C59.3346973%2C18.08601%7C59.34239087672087%2C18.091298657873768%7C59.35072850078383%2C18.068330300179856%7C59.3503027%2C18.0646492%7C59.34405604261072%2C18.054624827152903%7C59.42743822799574%2C17.950871456024473"
+      ],
+      "duration": "220 min",
+      "distance": "183.0 km",
+      "unmatched": [],
+      "unmatched_count": 0
+    },
+    "Pawlos": {
+      "status": "ok",
+      "stores": [
+        "Ica Sätuna",
+        "Coop Märsta",
+        "Coop Rotebro (Ef)",
+        "Ica Norrviken",
+        "Ica Maxi Häggvik",
+        "Coop Häggvik",
+        "Ica Supermarket Husby",
+        "Ica Kista Galleria",
+        "Hemköp Ulriksdal",
+        "Quickstar Solna",
+        "Hemköp Scandinavia",
+        "Ica Supermarket Solna Centrum",
+        "Ica Rapid",
+        "Direkten Hornsbergsstrand",
+        "Ica Dalastan",
+        "Coop Norrtull",
+        "Ica Nära Roslagstul",
+        "Ica Supermarket Lunden",
+        "Coop Bredden",
+        "Ica Nära Sigma",
+        "Coop Korpkulla",
+        "Ica Glädjen"
+      ],
+      "store_count": 22,
+      "urls": [
+        "https://www.google.com/maps/dir/?api=1&origin=59.8542194,17.6650221&destination=59.3703416,17.9994567&waypoints=59.62790334184806%2C17.859809640689576%7C59.616359%2C17.856179%7C59.4714676%2C17.9161423%7C59.4531047%2C17.9209633%7C59.4377236%2C17.9323751%7C59.440994616418166%2C17.933881686714948%7C59.4101367%2C17.9256745%7C59.4024341%2C17.9464824%7C59.3808705%2C17.9992312",
+        "https://www.google.com/maps/dir/?api=1&origin=59.3703416,17.9994567&destination=59.5256014,17.9146423&waypoints=59.369771433296975%2C18.005007256021532%7C59.3601951%2C18.0005364%7C59.3535789%2C17.9976934%7C59.34055564989282%2C18.00820782533029%7C59.3439504%2C18.0430009%7C59.3466238%2C18.0469786%7C59.3493508%2C18.0593743%7C59.4105528%2C17.9635267%7C59.4969562%2C17.9261073",
+        "https://www.google.com/maps/dir/?api=1&origin=59.5256014,17.9146423&destination=59.8542194,17.6650221&waypoints=59.5218658%2C17.9021527%7C59.5136621%2C17.9290974"
+      ],
+      "duration": "205 min",
+      "distance": "165.2 km",
+      "unmatched": [],
+      "unmatched_count": 0
+    }
+  },
+  "generated_at": "2026-02-26 11:35:14",
+  "schedule_hour": 11,
+  "schedule_minute": 35
+}

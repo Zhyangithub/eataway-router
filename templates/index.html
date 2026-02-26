@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Route Dispatch — Uppsala</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Barlow+Condensed:wght@700;900&family=Barlow:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:      #07080f;
+    --surface: #0d1220;
+    --panel:   #111827;
+    --border:  #1e2d45;
+    --accent:  #f5a623;
+    --ok:      #22c55e;
+    --err:     #ef4444;
+    --warn:    #facc15;
+    --wa:      #25d366;
+    --text:    #c9d4e8;
+    --muted:   #4a5568;
+    --blue:    #38bdf8;
+    --mono:    'Share Tech Mono', monospace;
+    --sans:    'Barlow', sans-serif;
+    --cond:    'Barlow Condensed', sans-serif;
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: var(--sans); min-height: 100vh; overflow-x: hidden; }
+  body::before {
+    content: ''; position: fixed; inset: 0;
+    background-image: linear-gradient(rgba(245,166,35,.025) 1px,transparent 1px),
+                      linear-gradient(90deg,rgba(245,166,35,.025) 1px,transparent 1px);
+    background-size: 40px 40px; pointer-events: none; z-index: 0;
+  }
+
+  header {
+    position: relative; z-index: 10; padding: 0 2rem; height: 64px;
+    display: flex; align-items: center; justify-content: space-between;
+    border-bottom: 1px solid var(--border);
+    background: rgba(7,8,15,.95); backdrop-filter: blur(8px);
+  }
+  .logo { display: flex; align-items: center; gap: 12px; }
+  .logo-icon {
+    width: 34px; height: 34px; background: var(--accent);
+    clip-path: polygon(50% 0%,100% 25%,100% 75%,50% 100%,0% 75%,0% 25%);
+    display: grid; place-items: center; font-size: 16px;
+  }
+  .logo-text { font-family: var(--cond); font-weight: 900; font-size: 1.4rem; letter-spacing: .1em; color: #fff; }
+  .logo-sub  { font-family: var(--mono); font-size: .65rem; color: var(--accent); letter-spacing: .2em; }
+  #clock { font-family: var(--mono); font-size: 1.1rem; color: var(--accent); letter-spacing: .05em; }
+
+  main { position: relative; z-index: 1; max-width: 1400px; margin: 0 auto; padding: 2rem; }
+
+  /* ── Control bar ── */
+  .control-bar { display: flex; align-items: center; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap; }
+
+  .btn {
+    font-family: var(--cond); font-weight: 700; font-size: .95rem;
+    letter-spacing: .1em; padding: .6rem 1.4rem; border: none;
+    cursor: pointer; transition: all .15s; text-transform: uppercase;
+    clip-path: polygon(0 0,calc(100% - 8px) 0,100% 8px,100% 100%,8px 100%,0 calc(100% - 8px));
+    position: relative; overflow: hidden;
+  }
+  .btn::after { content:''; position:absolute; inset:0; background:rgba(255,255,255,.08); opacity:0; transition:opacity .15s; }
+  .btn:hover::after { opacity:1; }
+  .btn:active { transform:scale(.97); }
+  .btn-primary  { background: var(--accent); color: #000; }
+  .btn-primary:disabled { opacity: .45; cursor: not-allowed; }
+  .btn-secondary{ background: var(--panel); color: var(--text); border: 1px solid var(--border); }
+  .btn-export   { background: transparent; color: var(--blue); border: 1px solid var(--blue); }
+  .btn-export:disabled { opacity: .4; cursor: not-allowed; }
+  .btn-wa       { background: transparent; color: var(--wa); border: 1px solid var(--wa); }
+  .btn-wa:disabled { opacity: .4; cursor: not-allowed; }
+  .btn-wa-sm {
+    font-family: var(--mono); font-size: .65rem; padding: .3rem .7rem;
+    border: 1px solid rgba(37,211,102,.4); background: rgba(37,211,102,.06);
+    color: var(--wa); cursor: pointer; transition: all .15s; border-radius: 2px;
+    text-decoration: none; display: inline-flex; align-items: center; gap: .3rem;
+  }
+  .btn-wa-sm:hover { background: rgba(37,211,102,.15); border-color: var(--wa); }
+  .btn-wa-sm.no-phone { opacity: .35; pointer-events: none; }
+
+  .schedule-widget {
+    display: flex; align-items: center; gap: .5rem;
+    background: var(--panel); border: 1px solid var(--border); padding: .5rem 1rem;
+    clip-path: polygon(0 0,calc(100% - 8px) 0,100% 8px,100% 100%,8px 100%,0 calc(100% - 8px));
+  }
+  .schedule-widget label { font-family: var(--mono); font-size: .7rem; color: var(--muted); letter-spacing: .1em; }
+  .schedule-widget input[type="time"] {
+    background: var(--bg); border: 1px solid var(--border); color: var(--accent);
+    font-family: var(--mono); font-size: 1rem; padding: .2rem .5rem; outline: none; width: 110px;
+  }
+  .schedule-widget input[type="time"]::-webkit-calendar-picker-indicator { filter: invert(1) opacity(.3); }
+
+  /* ── Status strip ── */
+  .status-strip {
+    display: flex; align-items: center; gap: .75rem; padding: .6rem 1.2rem;
+    background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--muted);
+    margin-bottom: 2rem; font-family: var(--mono); font-size: .78rem; transition: border-color .3s;
+  }
+  .status-strip.ok      { border-left-color: var(--ok); }
+  .status-strip.running { border-left-color: var(--accent); }
+  .status-strip.error   { border-left-color: var(--err); }
+  #status-dot { width:8px;height:8px;border-radius:50%;background:var(--muted);flex-shrink:0;transition:background .3s; }
+  @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.4;transform:scale(.8)} }
+  .spinner { display:inline-block;width:10px;height:10px;border:2px solid rgba(0,0,0,.3);border-top-color:#000;border-radius:50%;animation:spin .6s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+
+  /* ── Phone config panel ── */
+  .phone-panel {
+    background: var(--surface); border: 1px solid var(--border);
+    margin-bottom: 2rem; overflow: hidden;
+  }
+  .phone-panel-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: .7rem 1.2rem; cursor: pointer; user-select: none;
+    border-bottom: 1px solid transparent; transition: background .15s;
+  }
+  .phone-panel-header:hover { background: rgba(255,255,255,.02); }
+  .phone-panel-header.open  { border-bottom-color: var(--border); }
+  .phone-panel-title { font-family: var(--mono); font-size: .72rem; color: var(--wa); letter-spacing: .15em; text-transform: uppercase; }
+  .phone-panel-body { display: none; padding: 1rem 1.2rem; }
+  .phone-panel-body.open { display: block; }
+  .phone-grid { display: grid; grid-template-columns: repeat(auto-fill,minmax(220px,1fr)); gap: .6rem; margin-bottom: .8rem; }
+  .phone-row { display: flex; flex-direction: column; gap: .25rem; }
+  .phone-label { font-family: var(--mono); font-size: .65rem; color: var(--muted); letter-spacing: .1em; }
+  .phone-input {
+    background: var(--bg); border: 1px solid var(--border); color: var(--text);
+    font-family: var(--mono); font-size: .8rem; padding: .35rem .6rem; outline: none;
+    transition: border-color .15s; width: 100%;
+  }
+  .phone-input:focus { border-color: var(--wa); }
+  .phone-hint { font-family: var(--mono); font-size: .62rem; color: var(--muted); margin-bottom: .8rem; }
+
+  /* ── Drivers grid ── */
+  .drivers-grid { display: grid; grid-template-columns: repeat(auto-fill,minmax(380px,1fr)); gap: 1.5rem; }
+
+  .driver-card {
+    background: var(--surface); border: 1px solid var(--border); position: relative; overflow: hidden;
+    transition: border-color .2s, transform .2s; animation: fadeSlideIn .4s ease both;
+  }
+  @keyframes fadeSlideIn { from{opacity:0;transform:translateY(16px)} to{opacity:1;transform:translateY(0)} }
+  .driver-card:hover         { border-color: rgba(245,166,35,.35); transform: translateY(-2px); }
+  .driver-card.status-ok     { border-top: 2px solid var(--ok); }
+  .driver-card.status-error  { border-top: 2px solid var(--err); }
+  .driver-card.status-idle   { border-top: 2px solid var(--muted); }
+  .driver-card::after {
+    content:''; position:absolute; top:0; right:0; width:40px; height:40px;
+    background: linear-gradient(225deg,rgba(245,166,35,.08) 0%,transparent 60%);
+  }
+
+  .card-header {
+    padding: 1rem 1.2rem .8rem; display: flex; align-items: flex-start; justify-content: space-between;
+    border-bottom: 1px solid var(--border);
+  }
+  .driver-name  { font-family: var(--cond); font-weight: 900; font-size: 1.6rem; letter-spacing: .05em; color: #fff; line-height: 1; }
+  .driver-id    { font-family: var(--mono); font-size: .65rem; color: var(--muted); letter-spacing: .15em; margin-top: 3px; }
+  .card-header-right { display: flex; align-items: center; gap: .6rem; }
+  .status-badge { font-family: var(--mono); font-size: .65rem; letter-spacing: .15em; padding: 3px 8px; border: 1px solid; text-transform: uppercase; }
+  .badge-ok    { color: var(--ok);   border-color: var(--ok);   background: rgba(34,197,94,.08); }
+  .badge-error { color: var(--err);  border-color: var(--err);  background: rgba(239,68,68,.08); }
+  .badge-idle  { color: var(--muted);border-color: var(--muted);background: transparent; }
+
+  .card-stats { display: grid; grid-template-columns: repeat(3,1fr); border-bottom: 1px solid var(--border); }
+  .stat { padding: .7rem 1rem; border-right: 1px solid var(--border); text-align: center; }
+  .stat:last-child { border-right: none; }
+  .stat-val { font-family: var(--mono); font-size: 1.1rem; color: var(--accent); display: block; }
+  .stat-key { font-size: .65rem; color: var(--muted); letter-spacing: .1em; text-transform: uppercase; }
+
+  .card-links { padding: .8rem 1.2rem; }
+  .links-label { font-family: var(--mono); font-size: .65rem; color: var(--muted); letter-spacing: .15em; text-transform: uppercase; margin-bottom: .5rem; }
+  .link-row { display: flex; align-items: center; gap: .6rem; margin-bottom: .4rem; }
+  .seg-label { font-family: var(--mono); font-size: .65rem; color: var(--muted); width: 28px; flex-shrink: 0; }
+  .link-btn {
+    flex: 1; font-family: var(--mono); font-size: .7rem; color: var(--blue);
+    background: rgba(56,189,248,.05); border: 1px solid rgba(56,189,248,.2);
+    padding: .35rem .7rem; text-decoration: none; display: flex; align-items: center;
+    justify-content: space-between; gap: .5rem; transition: background .15s,border-color .15s;
+    overflow: hidden; white-space: nowrap;
+  }
+  .link-btn:hover { background: rgba(56,189,248,.12); border-color: rgba(56,189,248,.5); color: #fff; }
+  .link-url { overflow: hidden; text-overflow: ellipsis; flex: 1; }
+
+  /* ── Stop order (FIX: tall + always scrollable) ── */
+  .stops-toggle {
+    width: 100%; background: none; border: none; border-top: 1px solid var(--border);
+    color: var(--muted); font-family: var(--mono); font-size: .68rem; letter-spacing: .1em;
+    padding: .5rem 1.2rem; text-align: left; cursor: pointer;
+    display: flex; justify-content: space-between; align-items: center;
+    transition: color .15s, background .15s; text-transform: uppercase;
+  }
+  .stops-toggle:hover { color: var(--text); background: rgba(255,255,255,.02); }
+
+  .stops-list {
+    display: none;
+    padding: .4rem 1.2rem .8rem;
+    border-top: 1px solid var(--border);
+    max-height: 320px;     /* FIX: was 200px — now taller */
+    overflow-y: scroll;    /* FIX: always show scrollbar so user knows it scrolls */
+  }
+  .stops-list.open { display: block; }
+  .stops-list::-webkit-scrollbar       { width: 5px; }
+  .stops-list::-webkit-scrollbar-track { background: var(--bg); }
+  .stops-list::-webkit-scrollbar-thumb { background: var(--accent); border-radius: 3px; }
+  .stop-item {
+    display: flex; align-items: center; gap: .6rem; padding: .3rem 0;
+    font-family: var(--mono); font-size: .72rem; color: var(--text);
+    border-bottom: 1px solid rgba(255,255,255,.04);
+  }
+  .stop-item:last-child { border-bottom: none; }
+  .stop-num { color: var(--accent); width: 22px; text-align: right; flex-shrink: 0; font-size: .65rem; }
+
+  .error-msg     { padding: .8rem 1.2rem; font-family: var(--mono); font-size: .72rem; color: var(--err); background: rgba(239,68,68,.05); border-top: 1px solid rgba(239,68,68,.15); }
+  .unmatched-row { font-family: var(--mono); font-size: .65rem; color: var(--warn); padding: .3rem 1.2rem; background: rgba(250,204,21,.04); border-top: 1px solid rgba(250,204,21,.15); }
+
+  .empty-state { grid-column:1/-1; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:5rem 2rem; color:var(--muted); }
+  .empty-icon  { font-size:3rem; margin-bottom:1rem; opacity:.4; }
+  .empty-text  { font-family:var(--cond); font-weight:700; font-size:1.2rem; letter-spacing:.1em; }
+
+  /* ── Next run label ── */
+  #next-run { font-family:var(--mono); font-size:.7rem; color:var(--muted); margin-left:auto; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <div class="logo-icon">🚛</div>
+    <div>
+      <div class="logo-text">ROUTE DISPATCH</div>
+      <div class="logo-sub">UPPSALA WAREHOUSE</div>
+    </div>
+  </div>
+  <div id="clock"></div>
+</header>
+
+<main>
+  <!-- Control bar -->
+  <div class="control-bar">
+    <button class="btn btn-primary" id="btn-generate" onclick="triggerGenerate()">▶ Generera Nu</button>
+
+    <div class="schedule-widget">
+      <label>AUTO</label>
+      <input type="time" id="schedule-time" onchange="saveSchedule()">
+      <label>varje dag</label>
+    </div>
+
+    <span id="next-run"></span>
+
+    <button class="btn btn-export" id="btn-export" onclick="exportExcel()" disabled>↓ Exportera Excel</button>
+    <button class="btn btn-wa"     id="btn-wa-all"  onclick="sendAllWA()"    disabled>✉ Skicka alla WhatsApp</button>
+  </div>
+
+  <!-- Status strip -->
+  <div class="status-strip" id="status-strip">
+    <div id="status-dot"></div>
+    <span id="status-text">Laddar...</span>
+  </div>
+
+  <!-- Phone number config (collapsible) -->
+  <div class="phone-panel">
+    <div class="phone-panel-header" onclick="togglePhonePanel(this)">
+      <span class="phone-panel-title">📱 WhatsApp-nummer per chaufför</span>
+      <span style="font-family:var(--mono);font-size:.7rem;color:var(--muted);">▼ klicka för att konfigurera</span>
+    </div>
+    <div class="phone-panel-body" id="phone-panel-body">
+      <p class="phone-hint">Format: landskod + nummer, utan + eller mellanslag. Exempel: 46701234567 (Sverige)</p>
+      <div class="phone-grid" id="phone-grid"><!-- filled by JS --></div>
+      <button class="btn btn-secondary" style="font-size:.8rem;padding:.4rem 1rem" onclick="savePhones()">💾 Spara nummer</button>
+      <span id="phones-saved" style="font-family:var(--mono);font-size:.7rem;color:var(--ok);margin-left:.8rem;display:none">✓ Sparat</span>
+    </div>
+  </div>
+
+  <!-- Driver cards -->
+  <div class="drivers-grid" id="drivers-grid">
+    <div class="empty-state">
+      <div class="empty-icon">📡</div>
+      <div class="empty-text">Laddar ruttdata...</div>
+    </div>
+  </div>
+</main>
+
+<script>
+let polling = null;
+let currentData = null;
+
+// ── Clock ──
+(function clock() {
+  const el = document.getElementById('clock');
+  setInterval(() => el.textContent = new Date().toTimeString().slice(0,8), 1000);
+  el.textContent = new Date().toTimeString().slice(0,8);
+})();
+
+
+// ── Generate ──
+async function triggerGenerate() {
+  const btn = document.getElementById('btn-generate');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Kör...';
+  const res = await fetch('/api/generate', { method: 'POST' });
+  const d = await res.json();
+  if (d.ok) startPolling();
+  else { btn.disabled = false; btn.innerHTML = '▶ Generera Nu'; setStatus('error', d.message); }
+}
+
+
+// ── Schedule (FIX: persisted in localStorage) ──
+function saveSchedule() {
+  const val = document.getElementById('schedule-time').value;
+  if (!val) return;
+  localStorage.setItem('scheduleTime', val);          // ← FIX: persist locally
+  const [hour, minute] = val.split(':').map(Number);
+  fetch('/api/schedule', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ hour, minute })
+  }).then(r => r.json()).then(d => {
+    if (d.ok) updateNextRun(hour, minute);
+    const el = document.getElementById('schedule-time');
+    el.style.outline = '1px solid var(--ok)';
+    setTimeout(() => el.style.outline = '', 1000);
+  });
+}
+
+function loadScheduleTime(serverHour, serverMinute) {
+  // FIX: prefer localStorage value, fall back to server
+  const saved = localStorage.getItem('scheduleTime');
+  const input = document.getElementById('schedule-time');
+  if (saved) {
+    input.value = saved;
+    const [h, m] = saved.split(':').map(Number);
+    updateNextRun(h, m);
+  } else {
+    const hh = String(serverHour).padStart(2,'0');
+    const mm = String(serverMinute).padStart(2,'0');
+    input.value = `${hh}:${mm}`;
+    updateNextRun(serverHour, serverMinute);
+  }
+}
+
+function updateNextRun(hour, minute) {
+  const now = new Date(), next = new Date();
+  next.setHours(hour, minute, 0, 0);
+  if (next <= now) next.setDate(next.getDate() + 1);
+  const diff = Math.round((next - now) / 60000);
+  const hrs = Math.floor(diff / 60), mins = diff % 60;
+  document.getElementById('next-run').textContent =
+    `Nästa: ${String(hour).padStart(2,'0')}:${String(minute).padStart(2,'0')} (om ${hrs}h ${mins}m)`;
+}
+
+
+// ── Phone panel ──
+function togglePhonePanel(header) {
+  header.classList.toggle('open');
+  document.getElementById('phone-panel-body').classList.toggle('open');
+}
+
+function buildPhoneGrid(drivers, phones) {
+  const grid = document.getElementById('phone-grid');
+  grid.innerHTML = drivers.map(d => `
+    <div class="phone-row">
+      <label class="phone-label">${d}</label>
+      <input class="phone-input" type="text" id="phone-${d}"
+             value="${phones[d] || ''}" placeholder="46701234567">
+    </div>`).join('');
+}
+
+async function savePhones() {
+  const phones = {};
+  (currentData?.drivers || []).forEach(d => {
+    phones[d] = document.getElementById(`phone-${d}`)?.value.trim() || '';
+  });
+  await fetch('/api/phones', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(phones)
+  });
+  currentData.phones = phones;
+  const msg = document.getElementById('phones-saved');
+  msg.style.display = 'inline';
+  setTimeout(() => msg.style.display = 'none', 2000);
+}
+
+
+// ── WhatsApp ──
+function buildWAMessage(driver, r) {
+  const date = currentData?.generated_at || '—';
+  const base = window.location.origin;
+  // Send a short link to the driver's personal route page — no long URLs in message
+  const pageUrl = `${base}/links/${driver}`;
+  return `🚛 *Körorder ${driver}* — ${date}\n📦 ${r.store_count || r.stores?.length} butiker | ⏱ ${r.duration || '–'} | 📍 ${r.distance || '–'}\n\nÖppna din ruttlänk här:\n${pageUrl}\n\n✅ Ha en bra dag!`;
+}
+
+function openWA(driver, r) {
+  const phone = currentData?.phones?.[driver];
+  if (!phone) return alert(`Inget telefonnummer för ${driver}. Lägg till i konfigurationen ovan.`);
+  const msg = encodeURIComponent(buildWAMessage(driver, r));
+  window.open(`https://wa.me/${phone}?text=${msg}`, '_blank');
+}
+
+function sendAllWA() {
+  if (!currentData?.results) return;
+  const drivers = currentData.drivers || [];
+  drivers.forEach(d => {
+    const r = currentData.results[d];
+    if (r?.status === 'ok') openWA(d, r);
+  });
+}
+
+
+// ── Export ──
+function exportExcel() { window.location.href = '/api/export'; }
+
+
+// ── Polling ──
+async function fetchAndRender() {
+  const data = await fetch('/api/status').then(r => r.json());
+  currentData = data;
+  render(data);
+  if (!data.running) { clearInterval(polling); polling = null; }
+}
+
+function startPolling() {
+  setStatus('running', '⚙ Optimerar rutter via Google Maps API...');
+  if (!polling) polling = setInterval(fetchAndRender, 1500);
+}
+
+
+// ── Render ──
+function render(data) {
+  const { results, generated_at, drivers, schedule_hour, schedule_minute, running, phones } = data;
+
+  loadScheduleTime(schedule_hour, schedule_minute);
+  if (drivers) buildPhoneGrid(drivers, phones || {});
+
+  const hasResults = Object.keys(results || {}).length > 0;
+  document.getElementById('btn-export').disabled  = !hasResults;
+  document.getElementById('btn-wa-all').disabled  = !hasResults;
+  document.getElementById('btn-generate').disabled = running;
+  document.getElementById('btn-generate').innerHTML = running
+    ? '<span class="spinner"></span> Kör...' : '▶ Generera Nu';
+
+  if (running) {
+    setStatus('running', '⚙ Optimerar rutter via Google Maps API...');
+  } else if (hasResults) {
+    const errCount = Object.values(results).filter(r => r.status === 'error').length;
+    setStatus(errCount ? 'error' : 'ok',
+      errCount ? `⚠ ${errCount} chaufför(er) fick fel — ${generated_at}`
+               : `✓ Alla rutter klara — ${generated_at}`);
+  } else {
+    setStatus('idle', 'Inga rutter — klicka Generera Nu för att starta.');
+  }
+
+  const grid = document.getElementById('drivers-grid');
+  if (!hasResults && !running) {
+    grid.innerHTML = `<div class="empty-state"><div class="empty-icon">📡</div>
+      <div class="empty-text">Väntar på ruttdata</div>
+      <div style="font-size:.8rem;margin-top:.5rem;font-family:var(--mono)">Klicka Generera Nu för att starta</div></div>`;
+    return;
+  }
+  if (running && !hasResults) {
+    grid.innerHTML = `<div class="empty-state"><div class="empty-icon">⚙</div>
+      <div class="empty-text">Optimerar...</div></div>`;
+    return;
+  }
+  grid.innerHTML = (drivers || []).map((d, i) =>
+    renderCard(d, results[d] || {}, i * 0.08, phones?.[d] || '')).join('');
+}
+
+function renderCard(driver, r, delay, phone) {
+  const isOk = r.status === 'ok';
+  const statusClass = r.status ? `status-${r.status}` : 'status-idle';
+  const badgeClass  = isOk ? 'badge-ok' : (r.status === 'error' ? 'badge-error' : 'badge-idle');
+  const badgeText   = isOk ? 'KLAR' : (r.status === 'error' ? 'FEL' : 'VÄNTAR');
+  const drvId = 'DRV-' + driver.toUpperCase().slice(0,3) + String(driver.length * 7 % 99).padStart(2,'0');
+
+  const waBtn = isOk ? `
+    <a class="btn-wa-sm ${phone ? '' : 'no-phone'}"
+       href="#" onclick="event.preventDefault();openWA('${driver}',currentData.results['${driver}'])">
+      📱 WhatsApp
+    </a>` : '';
+
+  const stats = isOk ? `
+    <div class="card-stats">
+      <div class="stat"><span class="stat-val">${r.store_count ?? '—'}</span><span class="stat-key">Stopp</span></div>
+      <div class="stat"><span class="stat-val">${r.duration ?? '—'}</span><span class="stat-key">Est. tid</span></div>
+      <div class="stat"><span class="stat-val">${r.distance ?? '—'}</span><span class="stat-key">Distans</span></div>
+    </div>` : '';
+
+  const links = isOk && r.urls?.length ? `
+    <div class="card-links">
+      <div class="links-label">Navigationslänkar</div>
+      ${r.urls.map((url, i) => `
+        <div class="link-row">
+          <span class="seg-label">S${i+1}</span>
+          <a href="${url}" target="_blank" class="link-btn">
+            <span class="link-url">${url.slice(0,58)}…</span><span>↗</span>
+          </a>
+        </div>`).join('')}
+    </div>` : '';
+
+  const unmatched = r.unmatched?.length ? `
+    <div class="unmatched-row">⚠ ${r.unmatched_count} ej matchade: ${r.unmatched.join(', ')}</div>` : '';
+
+  const errMsg = !isOk && r.error ? `<div class="error-msg">✗ ${r.error}</div>` : '';
+
+  // FIX: store count shown in toggle button + scroll hint
+  const storeCount = r.stores?.length || 0;
+  const stops = isOk && storeCount ? `
+    <button class="stops-toggle" onclick="toggleStops(this)">
+      <span>KÖRORDNING (${storeCount} stopp)</span><span>▼</span>
+    </button>
+    <div class="stops-list">
+      ${r.stores.map((s, i) => `
+        <div class="stop-item">
+          <span class="stop-num">${i+1}</span><span>${s}</span>
+        </div>`).join('')}
+    </div>` : '';
+
+  return `
+    <div class="driver-card ${statusClass}" style="animation-delay:${delay}s">
+      <div class="card-header">
+        <div><div class="driver-name">${driver}</div><div class="driver-id">${drvId}</div></div>
+        <div class="card-header-right">
+          ${waBtn}
+          <span class="status-badge ${badgeClass}">${badgeText}</span>
+        </div>
+      </div>
+      ${stats}${links}${unmatched}${errMsg}${stops}
+    </div>`;
+}
+
+function toggleStops(btn) {
+  const list = btn.nextElementSibling;
+  list.classList.toggle('open');
+  btn.querySelector('span:last-child').textContent = list.classList.contains('open') ? '▲' : '▼';
+}
+
+function setStatus(type, msg) {
+  const strip = document.getElementById('status-strip');
+  const dot   = document.getElementById('status-dot');
+  strip.className = `status-strip ${type}`;
+  document.getElementById('status-text').textContent = msg;
+  const c = { ok:'var(--ok)', running:'var(--accent)', error:'var(--err)', idle:'var(--muted)' };
+  dot.style.background  = c[type] || c.idle;
+  dot.style.boxShadow   = type === 'running' ? '0 0 8px var(--accent)' : 'none';
+  dot.style.animation   = type === 'running' ? 'pulse 1s infinite' : 'none';
+}
+
+// ── Init ──
+(async () => {
+  const data = await fetch('/api/status').then(r => r.json());
+  currentData = data;
+  render(data);
+  if (data.running) startPolling();
+})();
+</script>
+</body>
+</html>
