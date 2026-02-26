@@ -156,6 +156,7 @@ def optimize_route(stores):
         "waypoints":   waypoints_str,
         "key":         API_KEY,
         "departure_time": "now",
+        "traffic_model": "best_guess",
     }
     resp = http_requests.get(
         "https://maps.googleapis.com/maps/api/directions/json", params=params)
