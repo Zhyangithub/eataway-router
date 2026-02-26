@@ -34,7 +34,7 @@ state = {
 }
 driver_phones  = {d: "" for d in DRIVERS}
 driver_emails  = {d: "" for d in DRIVERS}
-email_config   = {"sender": "", "password": "", "host": "smtp.gmail.com", "port": 587}
+email_config   = {"sender": "", "password": "", "host": "smtp.gmail.com", "port": 465}
 scheduler = BackgroundScheduler()
 
 
@@ -480,11 +480,21 @@ def send_email_to_driver(driver, r, base_url):
         msg["To"]      = to_addr
         html = build_email_html(driver, r, base_url)
         msg.attach(MIMEText(html, "html", "utf-8"))
-        with smtplib.SMTP(email_config.get("host", "smtp.gmail.com"),
-                          int(email_config.get("port", 587))) as srv:
-            srv.starttls()
-            srv.login(sender, password)
-            srv.sendmail(sender, to_addr, msg.as_bytes())
+        port = int(email_config.get("port", 465))
+        host = email_config.get("host", "smtp.gmail.com")
+        if port == 465:
+            # SSL (recommended on Railway)
+            import ssl
+            ctx = ssl.create_default_context()
+            with smtplib.SMTP_SSL(host, port, context=ctx) as srv:
+                srv.login(sender, password)
+                srv.sendmail(sender, to_addr, msg.as_bytes())
+        else:
+            # STARTTLS fallback
+            with smtplib.SMTP(host, port) as srv:
+                srv.starttls()
+                srv.login(sender, password)
+                srv.sendmail(sender, to_addr, msg.as_bytes())
         return True, "Skickat"
     except Exception as e:
         return False, str(e)
