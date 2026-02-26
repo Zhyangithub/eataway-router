@@ -4,9 +4,7 @@
 from flask import Flask, jsonify, render_template, request, send_file
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
-import json, os, io, urllib.parse, threading, smtplib
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
+import json, os, io, urllib.parse, threading
 from datetime import datetime
 import pandas as pd
 import requests as http_requests
@@ -38,10 +36,8 @@ driver_emails  = {
     for d in DRIVERS
 }
 email_config   = {
-    "sender":   os.environ.get("EMAIL_SENDER", ""),
-    "password": os.environ.get("EMAIL_PASSWORD", ""),
-    "host":     "smtp.gmail.com",
-    "port":     465
+    "sender":  os.environ.get("EMAIL_SENDER", "onboarding@resend.dev"),
+    "api_key": os.environ.get("RESEND_API_KEY", ""),
 }
 scheduler = BackgroundScheduler()
 
@@ -64,15 +60,11 @@ def load_state():
     if os.path.exists(EMAIL_CONFIG_FILE):
         with open(EMAIL_CONFIG_FILE, "r", encoding="utf-8") as f:
             saved_cfg = json.load(f)
-            # Only load host/port from file; sender/password come from env vars
-            for k in ("host", "port"):
-                if k in saved_cfg:
-                    email_config[k] = saved_cfg[k]
-            # Env vars take priority over saved file
+            # Env vars always take priority
             if os.environ.get("EMAIL_SENDER"):
                 email_config["sender"] = os.environ["EMAIL_SENDER"]
-            if os.environ.get("EMAIL_PASSWORD"):
-                email_config["password"] = os.environ["EMAIL_PASSWORD"]
+            if os.environ.get("RESEND_API_KEY"):
+                email_config["api_key"] = os.environ["RESEND_API_KEY"]
 
 def save_state():
     with open(STATE_FILE, "w", encoding="utf-8") as f:
@@ -94,8 +86,8 @@ def save_emails():
 def save_email_config():
     # Only save host/port to file; keep sender/password in env vars
     with open(EMAIL_CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump({"host": email_config["host"], "port": email_config["port"]},
-                  f, ensure_ascii=False, indent=2)
+        json.dump({"sender": email_config.get("sender","")},  # api_key stays in env
+                  f, ensure_ascii=False, indent=2)  # type: ignore
 
 
 # ── 核心逻辑（来自 main.py）────────────────────────────────
@@ -487,38 +479,34 @@ def build_email_html(driver, r, base_url):
 def send_email_to_driver(driver, r, base_url):
     to_addr = driver_emails.get(driver, "").strip()
     if not to_addr:
-        return False, "Ingen e-postadress"
-    sender   = email_config.get("sender", "").strip()
-    password = email_config.get("password", "").strip()
-    if not sender or not password:
-        return False, "E-postkonfiguration saknas"
+        return False, "Ingen e-postadress konfigurerad"
+    api_key = email_config.get("api_key", "").strip()
+    if not api_key:
+        return False, "RESEND_API_KEY saknas — lägg till i Railway Variables"
+    sender = email_config.get("sender", "onboarding@resend.dev").strip()
     try:
-        msg = MIMEMultipart("alternative")
-        msg["Subject"] = f"Kororder {driver} — {state.get('generated_at','')}"
-        msg["From"]    = sender
-        msg["To"]      = to_addr
         html = build_email_html(driver, r, base_url)
-        msg.attach(MIMEText(html, "html", "utf-8"))
-        port = int(email_config.get("port", 465))
-        host = email_config.get("host", "smtp.gmail.com")
-        if port == 465:
-            # SSL (recommended on Railway)
-            import ssl
-            ctx = ssl.create_default_context()
-            with smtplib.SMTP_SSL(host, port, context=ctx) as srv:
-                srv.login(sender, password)
-                srv.sendmail(sender, to_addr, msg.as_bytes())
+        payload = {
+            "from":    sender,
+            "to":      [to_addr],
+            "subject": f"Kororder {driver} — {state.get('generated_at','')}",
+            "html":    html,
+        }
+        resp = http_requests.post(
+            "https://api.resend.com/emails",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json=payload,
+            timeout=15
+        )
+        if resp.status_code in (200, 201):
+            return True, "Skickat"
         else:
-            # STARTTLS fallback
-            with smtplib.SMTP(host, port) as srv:
-                srv.starttls()
-                srv.login(sender, password)
-                srv.sendmail(sender, to_addr, msg.as_bytes())
-        return True, "Skickat"
+            err = resp.text
+            print(f"[EMAIL ERROR] {driver}: {resp.status_code} {err}")
+            return False, f"Resend API fel {resp.status_code}: {err}"
     except Exception as e:
         import traceback
-        err_detail = traceback.format_exc()
-        print(f"[EMAIL ERROR] {driver}: {err_detail}")
+        print(f"[EMAIL ERROR] {driver}: {traceback.format_exc()}")
         return False, str(e)
 
 
