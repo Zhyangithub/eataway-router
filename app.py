@@ -149,11 +149,19 @@ def load_and_merge_data(driver_name):
 
 
 def optimize_route(stores):
-    # Single store: no API call needed
-    if len(stores) == 1:
-        return stores, {"duration_min": 0, "distance_km": 0.0}
+    # Filter out stores with missing coordinates
+    valid_stores = [s for s in stores if s.get('lat') and s.get('lng')
+                    and str(s['lat']).strip() not in ('', 'nan', 'None')
+                    and str(s['lng']).strip() not in ('', 'nan', 'None')]
 
-    coords = "|".join(f"{s['lat']},{s['lng']}" for s in stores)
+    if not valid_stores:
+        return None, "Inga butiker med giltiga koordinater"
+
+    # Single store: no API call needed
+    if len(valid_stores) == 1:
+        return valid_stores, {"duration_min": 0, "distance_km": 0.0}
+
+    coords = "|".join(f"{s['lat']},{s['lng']}" for s in valid_stores)
 
     def _call(optimize, use_traffic):
         wp = ("optimize:true|" + coords) if optimize else coords
@@ -180,13 +188,13 @@ def optimize_route(stores):
 
     if data['status'] == 'OK':
         route  = data['routes'][0]
-        order  = route.get('waypoint_order', list(range(len(stores))))
+        order  = route.get('waypoint_order', list(range(len(valid_stores))))
         legs   = route['legs']
         dur_s  = sum(
             l.get('duration_in_traffic', l['duration'])['value']
             for l in legs)
         dist_m = sum(l['distance']['value'] for l in legs)
-        return [stores[i] for i in order], {
+        return [valid_stores[i] for i in order], {
             "duration_min": round(dur_s / 60),
             "distance_km":  round(dist_m / 1000, 1),
         }
@@ -198,6 +206,8 @@ def get_route_stats(ordered_stores):
     if not ordered_stores:
         return {"duration_min": 0, "distance_km": 0.0}
     waypoints_str = "|".join(f"{s['lat']},{s['lng']}" for s in ordered_stores)
+
+    # Attempt 1: with traffic
     params = {
         "origin":        WAREHOUSE_COORD,
         "destination":   WAREHOUSE_COORD,
@@ -206,14 +216,37 @@ def get_route_stats(ordered_stores):
         "departure_time": "now",
         "traffic_model": "best_guess",
     }
-    resp = http_requests.get(
-        "https://maps.googleapis.com/maps/api/directions/json", params=params)
-    data = resp.json()
-    if data["status"] == "OK":
-        legs   = data["routes"][0]["legs"]
-        dur_s  = sum(l.get("duration_in_traffic", l["duration"])["value"] for l in legs)
-        dist_m = sum(l["distance"]["value"] for l in legs)
-        return {"duration_min": round(dur_s / 60), "distance_km": round(dist_m / 1000, 1)}
+    try:
+        resp = http_requests.get(
+            "https://maps.googleapis.com/maps/api/directions/json", params=params)
+        data = resp.json()
+        if data["status"] == "OK":
+            legs   = data["routes"][0]["legs"]
+            dur_s  = sum(l.get("duration_in_traffic", l["duration"])["value"] for l in legs)
+            dist_m = sum(l["distance"]["value"] for l in legs)
+            return {"duration_min": round(dur_s / 60), "distance_km": round(dist_m / 1000, 1)}
+    except Exception as e:
+        print(f"[STATS] traffic call failed: {e}")
+
+    # Attempt 2: without traffic (more permissive)
+    params2 = {
+        "origin":      WAREHOUSE_COORD,
+        "destination": WAREHOUSE_COORD,
+        "waypoints":   waypoints_str,
+        "key":         API_KEY,
+    }
+    try:
+        resp2 = http_requests.get(
+            "https://maps.googleapis.com/maps/api/directions/json", params=params2)
+        data2 = resp2.json()
+        if data2["status"] == "OK":
+            legs   = data2["routes"][0]["legs"]
+            dur_s  = sum(l["duration"]["value"] for l in legs)
+            dist_m = sum(l["distance"]["value"] for l in legs)
+            return {"duration_min": round(dur_s / 60), "distance_km": round(dist_m / 1000, 1)}
+    except Exception as e:
+        print(f"[STATS] fallback call failed: {e}")
+
     return None
 
 
@@ -653,6 +686,9 @@ async function recalculate() {{
 
       btn.textContent = '✅ Klar! Räkna om igen';
       status.textContent = `Ny rutt: ${{data.duration}}, ${{data.distance}}`;
+      if (data.warning) {{
+        status.textContent += ` (⚠️ Optimering misslyckades, behåller nuvarande ordning)`;
+      }}
     }} else {{
       btn.textContent = '🔄 Räkna om med låsta stopp';
       status.textContent = '⚠️ Fel: ' + (data.error || data.msg || 'okänt fel');
@@ -795,10 +831,15 @@ def api_reorder(driver_name):
             unlocked_stores.append({k: v for k, v in s.items() if k != "locked"})
 
     # ── Optimize unlocked portion ──────────────────────────────
+    optimization_warning = None
     if unlocked_stores:
         optimized_unlocked, stats_or_err = optimize_route(unlocked_stores)
         if not optimized_unlocked:
-            return jsonify({"ok": False, "error": str(stats_or_err)}), 400
+            # Fallback: keep unlocked stores in their current order
+            # instead of failing the entire reorder
+            print(f"[REORDER] optimize_route failed for {driver_name}: {stats_or_err}, using current order")
+            optimized_unlocked = unlocked_stores
+            optimization_warning = str(stats_or_err)
     else:
         optimized_unlocked = []
 
@@ -810,7 +851,13 @@ def api_reorder(driver_name):
     unlocked_iter = iter(optimized_unlocked)
     for i in range(len(final)):
         if final[i] is None:
-            final[i] = next(unlocked_iter)
+            try:
+                final[i] = next(unlocked_iter)
+            except StopIteration:
+                break
+
+    # Remove any remaining None slots (safety)
+    final = [s for s in final if s is not None]
 
     # ── Get accurate stats for the complete merged route ───────
     stats = get_route_stats(final)
@@ -827,6 +874,10 @@ def api_reorder(driver_name):
     if stats:
         r["duration"] = f"{stats['duration_min']} min"
         r["distance"] = f"{stats['distance_km']} km"
+    elif not r.get("duration"):
+        # If stats call also failed, provide a placeholder
+        r["duration"] = "—"
+        r["distance"] = "—"
     save_state()
 
     return jsonify({
@@ -835,6 +886,7 @@ def api_reorder(driver_name):
         "urls":   urls,
         "duration": r.get("duration"),
         "distance": r.get("distance"),
+        "warning": optimization_warning,
     })
 
 
