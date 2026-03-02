@@ -153,36 +153,42 @@ def optimize_route(stores):
     if len(stores) == 1:
         return stores, {"duration_min": 0, "distance_km": 0.0}
 
-    waypoints_str = "optimize:true|" + "|".join(f"{s['lat']},{s['lng']}" for s in stores)
+    coords = "|".join(f"{s['lat']},{s['lng']}" for s in stores)
+    # optimize:true tells Google to reorder waypoints for shortest path
+    waypoints_optimized = "optimize:true|" + coords
+    # fixed order (no optimization) — used as fallback
+    waypoints_fixed     = coords
 
-    # First attempt: with real-time traffic
-    params = {
-        "origin":         WAREHOUSE_COORD,
-        "destination":    WAREHOUSE_COORD,
-        "waypoints":      waypoints_str,
-        "key":            API_KEY,
-        "departure_time": "now",
-        "traffic_model":  "best_guess",
-    }
-    resp = http_requests.get(
-        "https://maps.googleapis.com/maps/api/directions/json", params=params)
-    data = resp.json()
-
-    # Fallback: retry without traffic params if first attempt fails
-    if data['status'] != 'OK':
-        params_fallback = {
+    def _call(waypoints, use_traffic):
+        p = {
             "origin":      WAREHOUSE_COORD,
             "destination": WAREHOUSE_COORD,
-            "waypoints":   waypoints_str,
+            "waypoints":   waypoints,
             "key":         API_KEY,
         }
-        resp = http_requests.get(
-            "https://maps.googleapis.com/maps/api/directions/json", params=params_fallback)
-        data = resp.json()
+        if use_traffic:
+            p["departure_time"] = "now"
+            p["traffic_model"]  = "best_guess"
+        return http_requests.get(
+            "https://maps.googleapis.com/maps/api/directions/json", params=p).json()
+
+    # Attempt 1: optimize + traffic
+    data = _call(waypoints_optimized, use_traffic=True)
+
+    # Attempt 2: optimize, no traffic
+    if data['status'] != 'OK':
+        data = _call(waypoints_optimized, use_traffic=False)
+
+    # Attempt 3: fixed order, no traffic (most permissive)
+    optimized_order = True
+    if data['status'] != 'OK':
+        data = _call(waypoints_fixed, use_traffic=False)
+        optimized_order = False
 
     if data['status'] == 'OK':
         route  = data['routes'][0]
-        order  = route['waypoint_order']
+        # waypoint_order only present when optimize:true was accepted
+        order  = route.get('waypoint_order', list(range(len(stores))))
         legs   = route['legs']
         dur_s  = sum(
             l.get('duration_in_traffic', l['duration'])['value']
@@ -200,17 +206,24 @@ def get_route_stats(ordered_stores):
     if not ordered_stores:
         return {"duration_min": 0, "distance_km": 0.0}
     waypoints_str = "|".join(f"{s['lat']},{s['lng']}" for s in ordered_stores)
-    params = {
-        "origin":        WAREHOUSE_COORD,
-        "destination":   WAREHOUSE_COORD,
-        "waypoints":     waypoints_str,
-        "key":           API_KEY,
-        "departure_time": "now",
-        "traffic_model": "best_guess",
-    }
-    resp = http_requests.get(
-        "https://maps.googleapis.com/maps/api/directions/json", params=params)
-    data = resp.json()
+
+    def _call(use_traffic):
+        p = {
+            "origin":      WAREHOUSE_COORD,
+            "destination": WAREHOUSE_COORD,
+            "waypoints":   waypoints_str,
+            "key":         API_KEY,
+        }
+        if use_traffic:
+            p["departure_time"] = "now"
+            p["traffic_model"]  = "best_guess"
+        return http_requests.get(
+            "https://maps.googleapis.com/maps/api/directions/json", params=p).json()
+
+    data = _call(use_traffic=True)
+    if data["status"] != "OK":
+        data = _call(use_traffic=False)
+
     if data["status"] == "OK":
         legs   = data["routes"][0]["legs"]
         dur_s  = sum(l.get("duration_in_traffic", l["duration"])["value"] for l in legs)
