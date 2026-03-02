@@ -149,39 +149,38 @@ def load_and_merge_data(driver_name):
 
 
 def optimize_route(stores):
+    # Single store: no API call needed
     if len(stores) == 1:
         return stores, {"duration_min": 0, "distance_km": 0.0}
 
-    waypoints_str = "optimize:true|" + "|".join(f"{s['lat']},{s['lng']}" for s in stores)
+    coords = "|".join(f"{s['lat']},{s['lng']}" for s in stores)
 
-    # 先尝试带实时交通的请求
-    params = {
-        "origin":         WAREHOUSE_COORD,
-        "destination":    WAREHOUSE_COORD,
-        "waypoints":      waypoints_str,
-        "key":            API_KEY,
-        "departure_time": "now",
-        "traffic_model":  "best_guess",
-    }
-    resp = http_requests.get(
-        "https://maps.googleapis.com/maps/api/directions/json", params=params)
-    data = resp.json()
-
-    # 如果失败，fallback：去掉交通参数重试
-    if data['status'] != 'OK':
-        params_fallback = {
+    def _call(optimize, use_traffic):
+        wp = ("optimize:true|" + coords) if optimize else coords
+        p = {
             "origin":      WAREHOUSE_COORD,
             "destination": WAREHOUSE_COORD,
-            "waypoints":   waypoints_str,
+            "waypoints":   wp,
             "key":         API_KEY,
         }
-        resp = http_requests.get(
-            "https://maps.googleapis.com/maps/api/directions/json", params=params_fallback)
-        data = resp.json()
+        if use_traffic:
+            p["departure_time"] = "now"
+            p["traffic_model"]  = "best_guess"
+        return http_requests.get(
+            "https://maps.googleapis.com/maps/api/directions/json", params=p).json()
+
+    # Attempt 1: optimize + traffic (best case)
+    data = _call(optimize=True, use_traffic=True)
+    # Attempt 2: optimize, no traffic
+    if data['status'] != 'OK':
+        data = _call(optimize=True, use_traffic=False)
+    # Attempt 3: fixed order, no traffic (most permissive)
+    if data['status'] != 'OK':
+        data = _call(optimize=False, use_traffic=False)
 
     if data['status'] == 'OK':
         route  = data['routes'][0]
-        order  = route['waypoint_order']
+        order  = route.get('waypoint_order', list(range(len(stores))))
         legs   = route['legs']
         dur_s  = sum(
             l.get('duration_in_traffic', l['duration'])['value']
