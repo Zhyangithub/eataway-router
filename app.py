@@ -149,13 +149,12 @@ def load_and_merge_data(driver_name):
 
 
 def optimize_route(stores):
-    # Single store: no API call needed
     if len(stores) == 1:
         return stores, {"duration_min": 0, "distance_km": 0.0}
 
     waypoints_str = "optimize:true|" + "|".join(f"{s['lat']},{s['lng']}" for s in stores)
 
-    # First attempt: with real-time traffic
+    # 先尝试带实时交通的请求
     params = {
         "origin":         WAREHOUSE_COORD,
         "destination":    WAREHOUSE_COORD,
@@ -168,7 +167,7 @@ def optimize_route(stores):
         "https://maps.googleapis.com/maps/api/directions/json", params=params)
     data = resp.json()
 
-    # Fallback: retry without traffic params if first attempt fails
+    # 如果失败，fallback：去掉交通参数重试
     if data['status'] != 'OK':
         params_fallback = {
             "origin":      WAREHOUSE_COORD,
