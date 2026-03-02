@@ -176,10 +176,41 @@ def optimize_route(stores):
     return None, data.get('error_message', data['status'])
 
 
+def get_route_stats(ordered_stores):
+    """Calculate duration/distance for a fixed (already-ordered) route."""
+    if not ordered_stores:
+        return {"duration_min": 0, "distance_km": 0.0}
+    waypoints_str = "|".join(f"{s['lat']},{s['lng']}" for s in ordered_stores)
+    params = {
+        "origin":        WAREHOUSE_COORD,
+        "destination":   WAREHOUSE_COORD,
+        "waypoints":     waypoints_str,
+        "key":           API_KEY,
+        "departure_time": "now",
+        "traffic_model": "best_guess",
+    }
+    resp = http_requests.get(
+        "https://maps.googleapis.com/maps/api/directions/json", params=params)
+    data = resp.json()
+    if data["status"] == "OK":
+        legs   = data["routes"][0]["legs"]
+        dur_s  = sum(l.get("duration_in_traffic", l["duration"])["value"] for l in legs)
+        dist_m = sum(l["distance"]["value"] for l in legs)
+        return {"duration_min": round(dur_s / 60), "distance_km": round(dist_m / 1000, 1)}
+    return None
+
+
+def _gmaps_point(s):
+    """Return coordinate string for warehouse, store name string for stores."""
+    if s.get("is_warehouse"):
+        return f"{s['lat']},{s['lng']}"
+    return s["name"]
+
+
 def generate_urls(optimized_stores):
     urls   = []
     wh_lat, wh_lng = WAREHOUSE_COORD.split(',')
-    wh     = {"name": "Lager (Uppsala)", "lat": wh_lat, "lng": wh_lng}
+    wh     = {"name": "Lager (Uppsala)", "lat": wh_lat, "lng": wh_lng, "is_warehouse": True}
     path   = [wh] + optimized_stores + [wh]
     for i in range(0, len(path) - 1, 10):
         chunk  = path[i: i+11]
@@ -187,11 +218,11 @@ def generate_urls(optimized_stores):
         wp_str = ""
         if wps:
             wp_str = "&waypoints=" + urllib.parse.quote(
-                "|".join(f"{s['lat']},{s['lng']}" for s in wps))
+                "|".join(_gmaps_point(s) for s in wps))
         urls.append(
             f"https://www.google.com/maps/dir/?api=1"
-            f"&origin={origin['lat']},{origin['lng']}"
-            f"&destination={dest['lat']},{dest['lng']}{wp_str}"
+            f"&origin={urllib.parse.quote(_gmaps_point(origin))}"
+            f"&destination={urllib.parse.quote(_gmaps_point(dest))}{wp_str}"
         )
     return urls
 
@@ -213,13 +244,14 @@ def run_all_drivers():
 
             urls = generate_urls(optimized)
             results[driver] = {
-                "status":       "ok",
-                "stores":       [s["name"] for s in optimized],
-                "store_count":  len(optimized),
-                "urls":         urls,
-                "duration":     f"{stats_or_err['duration_min']} min",
-                "distance":     f"{stats_or_err['distance_km']} km",
-                "unmatched":    unmatched if isinstance(unmatched, list) else [],
+                "status":        "ok",
+                "stores":        [s["name"] for s in optimized],
+                "store_objects": optimized,   # ← full objects with lat/lng for reorder
+                "store_count":   len(optimized),
+                "urls":          urls,
+                "duration":      f"{stats_or_err['duration_min']} min",
+                "distance":      f"{stats_or_err['distance_km']} km",
+                "unmatched":     unmatched if isinstance(unmatched, list) else [],
                 "unmatched_count": len(unmatched) if isinstance(unmatched, list) else 0,
             }
         except Exception as e:
@@ -357,7 +389,7 @@ def api_export():
 
 @app.route("/links/<driver_name>")
 def driver_links(driver_name):
-    r = state["results"].get(driver_name)
+    r    = state["results"].get(driver_name)
     date = state.get("generated_at", "—")
     if not r or r.get("status") != "ok":
         return f"""<!DOCTYPE html><html><head><meta charset="UTF-8">
@@ -366,40 +398,70 @@ def driver_links(driver_name):
         <body style="font-family:sans-serif;padding:2rem;background:#111;color:#fff">
         <h2>Inga rutter för {driver_name} ännu.</h2></body></html>""", 404
 
-    urls   = r.get("urls", [])
-    stores = r.get("stores", [])
-    store_list = "".join(
-        f'<div style="padding:6px 0;border-bottom:1px solid #222;font-size:14px">'
-        f'<span style="color:#f5a623;margin-right:8px">{i+1}.</span>{s}</div>'
-        for i, s in enumerate(stores)
-    )
+    urls          = r.get("urls", [])
+    store_objects = r.get("store_objects", [
+        {"name": s, "lat": "", "lng": ""} for s in r.get("stores", [])
+    ])
+
+    # Serialise store objects for injection into JS
+    store_objects_json = json.dumps(store_objects, ensure_ascii=False)
+
     link_btns = "".join(
-        f'<a href="{u}" style="display:block;margin:10px 0;padding:14px 18px;'
-        f'background:#1a73e8;color:#fff;text-decoration:none;border-radius:8px;'
-        f'font-size:15px;font-weight:600;text-align:center">🗺 Segment {i+1} — Öppna i Google Maps</a>'
+        f'<a href="{u}" id="mapbtn{i}" class="map-btn">🗺 Segment {i+1} — Öppna i Google Maps</a>'
         for i, u in enumerate(urls)
     )
+
     return f"""<!DOCTYPE html>
 <html><head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Körorder — {driver_name}</title>
   <style>
-    * {{ box-sizing:border-box; margin:0; padding:0; }}
-    body {{ font-family:-apple-system,BlinkMacSystemFont,sans-serif; background:#0f111a; color:#e0e6f0; min-height:100vh; }}
-    .header {{ background:#161b27; border-bottom:1px solid #1e2d45; padding:18px 20px; }}
-    .name {{ font-size:26px; font-weight:800; color:#fff; }}
-    .meta {{ font-size:13px; color:#6b7a99; margin-top:4px; }}
-    .stats {{ display:grid; grid-template-columns:repeat(3,1fr); border-bottom:1px solid #1e2d45; }}
-    .stat {{ padding:16px; text-align:center; border-right:1px solid #1e2d45; }}
-    .stat:last-child {{ border-right:none; }}
-    .stat-val {{ font-size:22px; font-weight:700; color:#f5a623; display:block; }}
-    .stat-lbl {{ font-size:11px; color:#6b7a99; text-transform:uppercase; letter-spacing:.5px; }}
-    .section {{ padding:16px 20px; }}
-    .section-title {{ font-size:11px; color:#6b7a99; text-transform:uppercase; letter-spacing:1px; margin-bottom:12px; }}
-    .store-list {{ background:#161b27; border-radius:8px; padding:4px 12px; max-height:260px; overflow-y:auto; margin-bottom:4px; }}
-    .toggle {{ background:none; border:1px solid #1e2d45; color:#6b7a99; padding:8px 14px; border-radius:6px; font-size:13px; cursor:pointer; margin-bottom:16px; width:100%; }}
-    #store-list {{ display:none; }}
+    *{{box-sizing:border-box;margin:0;padding:0}}
+    body{{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#0f111a;color:#e0e6f0;min-height:100vh}}
+    .header{{background:#161b27;border-bottom:1px solid #1e2d45;padding:18px 20px}}
+    .name{{font-size:26px;font-weight:800;color:#fff}}
+    .meta{{font-size:13px;color:#6b7a99;margin-top:4px}}
+    .stats{{display:grid;grid-template-columns:repeat(3,1fr);border-bottom:1px solid #1e2d45}}
+    .stat{{padding:16px;text-align:center;border-right:1px solid #1e2d45}}
+    .stat:last-child{{border-right:none}}
+    .stat-val{{font-size:22px;font-weight:700;color:#f5a623;display:block}}
+    .stat-lbl{{font-size:11px;color:#6b7a99;text-transform:uppercase;letter-spacing:.5px}}
+    .section{{padding:16px 20px}}
+    .section-title{{font-size:11px;color:#6b7a99;text-transform:uppercase;letter-spacing:1px;margin-bottom:12px}}
+    .map-btn{{display:block;margin:10px 0;padding:14px 18px;background:#1a73e8;color:#fff;
+              text-decoration:none;border-radius:8px;font-size:15px;font-weight:600;text-align:center}}
+    .toggle{{background:none;border:1px solid #1e2d45;color:#6b7a99;padding:8px 14px;
+             border-radius:6px;font-size:13px;cursor:pointer;margin-bottom:12px;width:100%}}
+
+    /* ── Stop list ── */
+    #stop-panel{{display:none;margin-top:4px}}
+    .stop-list{{background:#161b27;border-radius:8px;overflow:hidden}}
+    .stop-row{{display:flex;align-items:center;padding:10px 12px;
+               border-bottom:1px solid #1e2d45;gap:8px;
+               transition:background .15s;cursor:grab;user-select:none}}
+    .stop-row:last-child{{border-bottom:none}}
+    .stop-row.dragging{{opacity:.4;background:#0a0c14}}
+    .stop-row.drag-over{{background:#1a2540;border-top:2px solid #1a73e8}}
+    .stop-row.locked-row{{background:#1a1e10}}
+    .stop-num{{color:#f5a623;font-weight:700;font-size:14px;min-width:26px;text-align:right}}
+    .stop-name{{flex:1;font-size:14px;color:#e0e6f0}}
+    .drag-handle{{color:#444;font-size:18px;cursor:grab;padding:0 4px}}
+    .btn-up,.btn-dn{{background:none;border:1px solid #2a3550;color:#6b7a99;
+                     border-radius:4px;font-size:14px;padding:3px 7px;cursor:pointer;line-height:1}}
+    .btn-up:hover,.btn-dn:hover{{background:#1e2d45;color:#fff}}
+    .btn-lock{{background:none;border:none;font-size:18px;cursor:pointer;padding:2px 4px;line-height:1}}
+    .lock-hint{{font-size:11px;color:#6b7a99;text-align:center;padding:8px;font-style:italic}}
+
+    /* ── Recalculate button ── */
+    .recalc-bar{{padding:14px 20px;border-top:1px solid #1e2d45;background:#161b27;position:sticky;bottom:0}}
+    .btn-recalc{{width:100%;padding:14px;background:#2d6a2d;color:#fff;border:none;
+                 border-radius:8px;font-size:15px;font-weight:700;cursor:pointer}}
+    .btn-recalc:hover{{background:#3a8a3a}}
+    .btn-recalc:disabled{{background:#333;color:#666;cursor:not-allowed}}
+    .recalc-status{{font-size:12px;color:#6b7a99;text-align:center;margin-top:6px;min-height:16px}}
+    .locked-badge{{font-size:10px;background:#2a3510;color:#8bc34a;
+                   border:1px solid #4a6420;border-radius:4px;padding:1px 5px;margin-left:6px}}
   </style>
 </head>
 <body>
@@ -408,16 +470,192 @@ def driver_links(driver_name):
     <div class="meta">Genererad: {date}</div>
   </div>
   <div class="stats">
-    <div class="stat"><span class="stat-val">{r.get("store_count","—")}</span><span class="stat-lbl">Butiker</span></div>
-    <div class="stat"><span class="stat-val">{r.get("duration","—")}</span><span class="stat-lbl">Est. tid</span></div>
-    <div class="stat"><span class="stat-val">{r.get("distance","—")}</span><span class="stat-lbl">Distans</span></div>
+    <div class="stat"><span class="stat-val" id="s-count">{r.get("store_count","—")}</span><span class="stat-lbl">Butiker</span></div>
+    <div class="stat"><span class="stat-val" id="s-dur">{r.get("duration","—")}</span><span class="stat-lbl">Est. tid</span></div>
+    <div class="stat"><span class="stat-val" id="s-dist">{r.get("distance","—")}</span><span class="stat-lbl">Distans</span></div>
   </div>
+
   <div class="section">
     <div class="section-title">Navigationslänkar</div>
-    {link_btns}
-    <button class="toggle" onclick="var l=document.getElementById('store-list');l.style.display=l.style.display=='none'?'block':'none';this.textContent=l.style.display=='block'?'▲ Dölj körordning':'▼ Visa körordning ({len(stores)} stopp)'">▼ Visa körordning ({len(stores)} stopp)</button>
-    <div id="store-list"><div class="store-list">{store_list}</div></div>
+    <div id="map-btns">{link_btns}</div>
+
+    <button class="toggle" id="toggle-btn"
+      onclick="var p=document.getElementById('stop-panel');
+               var open=p.style.display!='block';
+               p.style.display=open?'block':'none';
+               this.textContent=open?'▲ Dölj / redigera stopp':'▼ Visa / redigera stopp'">
+      ▼ Visa / redigera stopp
+    </button>
+
+    <div id="stop-panel">
+      <div class="lock-hint">🔒 Lås ett stopp för att hålla det kvar vid omräkning. Dra eller använd pilarna för att ändra ordning.</div>
+      <div class="stop-list" id="stop-list"></div>
+    </div>
   </div>
+
+  <div class="recalc-bar" id="recalc-bar" style="display:none">
+    <button class="btn-recalc" id="btn-recalc" onclick="recalculate()">
+      🔄 Räkna om med låsta stopp
+    </button>
+    <div class="recalc-status" id="recalc-status"></div>
+  </div>
+
+<script>
+// ── State ──────────────────────────────────────────────────────
+const DRIVER = {json.dumps(driver_name)};
+let stores   = {store_objects_json};
+let locked   = new Set();   // Set of 0-indexed locked positions (in current order)
+let dragSrcIdx = null;
+
+// ── Render ─────────────────────────────────────────────────────
+function render() {{
+  const list = document.getElementById('stop-list');
+  list.innerHTML = '';
+  stores.forEach((s, i) => {{
+    const isLocked = locked.has(i);
+    const row = document.createElement('div');
+    row.className = 'stop-row' + (isLocked ? ' locked-row' : '');
+    row.draggable = true;
+    row.dataset.idx = i;
+    row.innerHTML = `
+      <span class="drag-handle">⠿</span>
+      <span class="stop-num">${{i+1}}</span>
+      <span class="stop-name">${{s.name}}${{isLocked ? '<span class="locked-badge">🔒 LÅST</span>' : ''}}</span>
+      <button class="btn-up" onclick="moveUp(${{i}})" ${{i===0?'disabled':''}}>▲</button>
+      <button class="btn-dn" onclick="moveDown(${{i}})" ${{i===stores.length-1?'disabled':''}}>▼</button>
+      <button class="btn-lock" onclick="toggleLock(${{i}})" title="${{isLocked?'Lås upp':'Lås position'}}">${{isLocked?'🔒':'🔓'}}</button>
+    `;
+
+    // Drag events
+    row.addEventListener('dragstart', e => {{
+      dragSrcIdx = i;
+      setTimeout(() => row.classList.add('dragging'), 0);
+    }});
+    row.addEventListener('dragend', () => {{
+      row.classList.remove('dragging');
+      document.querySelectorAll('.stop-row').forEach(r => r.classList.remove('drag-over'));
+    }});
+    row.addEventListener('dragover', e => {{
+      e.preventDefault();
+      document.querySelectorAll('.stop-row').forEach(r => r.classList.remove('drag-over'));
+      if (dragSrcIdx !== i) row.classList.add('drag-over');
+    }});
+    row.addEventListener('drop', e => {{
+      e.preventDefault();
+      if (dragSrcIdx !== null && dragSrcIdx !== i) {{
+        moveToPos(dragSrcIdx, i);
+      }}
+    }});
+
+    list.appendChild(row);
+  }});
+
+  // Show recalc bar only if any stop has been moved or locked
+  updateRecalcBar();
+}}
+
+function updateRecalcBar() {{
+  const bar = document.getElementById('recalc-bar');
+  bar.style.display = 'block';   // always show once panel is used
+}}
+
+// ── Mutations ──────────────────────────────────────────────────
+function moveUp(i) {{
+  if (i === 0) return;
+  swapStores(i, i-1);
+}}
+function moveDown(i) {{
+  if (i === stores.length-1) return;
+  swapStores(i, i+1);
+}}
+function swapStores(a, b) {{
+  // Remap locked positions
+  const newLocked = new Set();
+  locked.forEach(p => {{
+    if (p===a) newLocked.add(b);
+    else if (p===b) newLocked.add(a);
+    else newLocked.add(p);
+  }});
+  locked = newLocked;
+  [stores[a], stores[b]] = [stores[b], stores[a]];
+  render();
+}}
+function moveToPos(from, to) {{
+  const item = stores.splice(from, 1)[0];
+  stores.splice(to, 0, item);
+  // Rebuild locked set: shift indices
+  const arr = Array.from(locked);
+  const newLocked = new Set();
+  arr.forEach(p => {{
+    if (p === from) {{ newLocked.add(to); return; }}
+    let np = p;
+    if (from < to) {{ if (p > from && p <= to) np = p - 1; }}
+    else           {{ if (p >= to && p < from) np = p + 1; }}
+    newLocked.add(np);
+  }});
+  locked = newLocked;
+  render();
+}}
+function toggleLock(i) {{
+  if (locked.has(i)) locked.delete(i);
+  else locked.add(i);
+  render();
+}}
+
+// ── Recalculate ────────────────────────────────────────────────
+async function recalculate() {{
+  const btn = document.getElementById('btn-recalc');
+  const status = document.getElementById('recalc-status');
+  btn.disabled = true;
+  btn.textContent = '⏳ Räknar om…';
+  status.textContent = '';
+
+  try {{
+    // Embed locked flag on each store object for the backend
+    const payload = stores.map((s, i) => ({{...s, locked: locked.has(i)}}));
+    const resp = await fetch(`/api/reorder/${{DRIVER}}`, {{
+      method: 'POST',
+      headers: {{'Content-Type': 'application/json'}},
+      body: JSON.stringify({{ stores: payload }})
+    }});
+    const data = await resp.json();
+    if (data.ok) {{
+      stores = data.stores;
+      locked = new Set();   // reset locks after successful recalc
+      render();
+
+      // Update stats
+      document.getElementById('s-dur').textContent  = data.duration;
+      document.getElementById('s-dist').textContent = data.distance;
+
+      // Rebuild map buttons
+      const btns = document.getElementById('map-btns');
+      btns.innerHTML = data.urls.map((u,i) =>
+        `<a href="${{u}}" class="map-btn">🗺 Segment ${{i+1}} — Öppna i Google Maps</a>`
+      ).join('');
+
+      btn.textContent = '✅ Klar! Räkna om igen';
+      status.textContent = `Ny rutt: ${{data.duration}}, ${{data.distance}}`;
+    }} else {{
+      btn.textContent = '🔄 Räkna om med låsta stopp';
+      status.textContent = '⚠️ Fel: ' + (data.msg || 'okänt fel');
+    }}
+  }} catch(e) {{
+    btn.textContent = '🔄 Räkna om med låsta stopp';
+    status.textContent = '⚠️ Nätverksfel: ' + e.message;
+  }}
+  btn.disabled = false;
+}}
+
+// ── Init ───────────────────────────────────────────────────────
+render();
+// Show recalc bar only after user opens the stop panel
+document.getElementById('btn-recalc').closest('.recalc-bar').style.display = 'none';
+document.getElementById('toggle-btn').addEventListener('click', () => {{
+  const open = document.getElementById('stop-panel').style.display === 'block';
+  document.getElementById('recalc-bar').style.display = open ? 'block' : 'none';
+}});
+</script>
 </body></html>"""
 
 
@@ -511,6 +749,76 @@ def send_email_to_driver(driver, r, base_url):
         import traceback
         print(f"[EMAIL ERROR] {driver}: {traceback.format_exc()}")
         return False, str(e)
+
+
+@app.route("/api/reorder/<driver_name>", methods=["POST"])
+def api_reorder(driver_name):
+    """
+    Reorder stops for a driver with optional locked positions.
+
+    Body: { "stores": [ {name, lat, lng, locked: bool}, ... ] }
+
+    Locked stores stay at their current index.
+    Unlocked stores are re-optimized by Google Maps to fill the remaining slots.
+    """
+    if driver_name not in DRIVERS:
+        return jsonify({"ok": False, "error": "Okänd chaufför"}), 404
+
+    store_list = request.json.get("stores", [])
+    if not store_list:
+        return jsonify({"ok": False, "error": "Tom butikslista"}), 400
+
+    locked_positions = {}   # {index: store_dict}
+    unlocked_stores  = []
+
+    for i, s in enumerate(store_list):
+        if s.get("locked"):
+            locked_positions[i] = {k: v for k, v in s.items() if k != "locked"}
+        else:
+            unlocked_stores.append({k: v for k, v in s.items() if k != "locked"})
+
+    # ── Optimize unlocked portion ──────────────────────────────
+    if unlocked_stores:
+        optimized_unlocked, stats_or_err = optimize_route(unlocked_stores)
+        if not optimized_unlocked:
+            return jsonify({"ok": False, "error": str(stats_or_err)}), 400
+    else:
+        optimized_unlocked = []
+
+    # ── Merge: locked stores hold their slots, unlocked fill the rest ─
+    final = [None] * len(store_list)
+    for idx, s in locked_positions.items():
+        final[idx] = s
+
+    unlocked_iter = iter(optimized_unlocked)
+    for i in range(len(final)):
+        if final[i] is None:
+            final[i] = next(unlocked_iter)
+
+    # ── Get accurate stats for the complete merged route ───────
+    stats = get_route_stats(final)
+
+    urls = generate_urls(final)
+
+    # ── Update state ───────────────────────────────────────────
+    r = state["results"].setdefault(driver_name, {})
+    r["status"]        = "ok"
+    r["stores"]        = [s["name"] for s in final]
+    r["store_objects"] = final
+    r["store_count"]   = len(final)
+    r["urls"]          = urls
+    if stats:
+        r["duration"] = f"{stats['duration_min']} min"
+        r["distance"] = f"{stats['distance_km']} km"
+    save_state()
+
+    return jsonify({
+        "ok":     True,
+        "stores": final,
+        "urls":   urls,
+        "duration": r.get("duration"),
+        "distance": r.get("distance"),
+    })
 
 
 @app.route("/api/emails", methods=["POST"])
