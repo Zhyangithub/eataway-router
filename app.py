@@ -149,26 +149,45 @@ def load_and_merge_data(driver_name):
 
 
 def optimize_route(stores):
+    # Single store: no API call needed
+    if len(stores) == 1:
+        return stores, {"duration_min": 0, "distance_km": 0.0}
+
     waypoints_str = "optimize:true|" + "|".join(f"{s['lat']},{s['lng']}" for s in stores)
+
+    # First attempt: with real-time traffic
     params = {
-        "origin":      WAREHOUSE_COORD,
-        "destination": WAREHOUSE_COORD,
-        "waypoints":   waypoints_str,
-        "key":         API_KEY,
+        "origin":         WAREHOUSE_COORD,
+        "destination":    WAREHOUSE_COORD,
+        "waypoints":      waypoints_str,
+        "key":            API_KEY,
         "departure_time": "now",
-        "traffic_model": "best_guess",
+        "traffic_model":  "best_guess",
     }
     resp = http_requests.get(
         "https://maps.googleapis.com/maps/api/directions/json", params=params)
     data = resp.json()
+
+    # Fallback: retry without traffic params if first attempt fails
+    if data['status'] != 'OK':
+        params_fallback = {
+            "origin":      WAREHOUSE_COORD,
+            "destination": WAREHOUSE_COORD,
+            "waypoints":   waypoints_str,
+            "key":         API_KEY,
+        }
+        resp = http_requests.get(
+            "https://maps.googleapis.com/maps/api/directions/json", params=params_fallback)
+        data = resp.json()
+
     if data['status'] == 'OK':
         route  = data['routes'][0]
         order  = route['waypoint_order']
         legs   = route['legs']
-        dur_s = sum(
-            l.get('duration_in_traffic', l['duration'])['value'] 
+        dur_s  = sum(
+            l.get('duration_in_traffic', l['duration'])['value']
             for l in legs)
-        dist_m = sum(l['distance']['value']  for l in legs)
+        dist_m = sum(l['distance']['value'] for l in legs)
         return [stores[i] for i in order], {
             "duration_min": round(dur_s / 60),
             "distance_km":  round(dist_m / 1000, 1),
@@ -638,7 +657,7 @@ async function recalculate() {{
       status.textContent = `Ny rutt: ${{data.duration}}, ${{data.distance}}`;
     }} else {{
       btn.textContent = '🔄 Räkna om med låsta stopp';
-      status.textContent = '⚠️ Fel: ' + (data.msg || 'okänt fel');
+      status.textContent = '⚠️ Fel: ' + (data.error || data.msg || 'okänt fel');
     }}
   }} catch(e) {{
     btn.textContent = '🔄 Räkna om med låsta stopp';
