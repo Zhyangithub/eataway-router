@@ -701,7 +701,7 @@ async function recalculate() {{
       btn.textContent = '✅ Klar! Räkna om igen';
       status.textContent = `Ny rutt: ${{data.duration}}, ${{data.distance}}`;
       if (data.warning) {{
-        status.textContent += ` (⚠️ API-fel vid optimering: ${data.warning})`;
+        status.textContent += ` (⚠️ API-fel vid optimering: ${{data.warning}})`;
       }}
     }} else {{
       btn.textContent = '🔄 Räkna om med låsta stopp';
