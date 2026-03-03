@@ -174,8 +174,14 @@ def optimize_route(stores):
         if use_traffic:
             p["departure_time"] = "now"
             p["traffic_model"]  = "best_guess"
-        return http_requests.get(
-            "https://maps.googleapis.com/maps/api/directions/json", params=p).json()
+        resp = http_requests.get(
+            "https://maps.googleapis.com/maps/api/directions/json", params=p)
+        data = resp.json()
+        if data["status"] != "OK":
+            print(f"[OPTIMIZE] API failed — status={data['status']} "
+                  f"optimize={optimize} traffic={use_traffic} "
+                  f"error={data.get('error_message', '')}")
+        return data
 
     # Attempt 1: optimize + traffic (best case)
     data = _call(optimize=True, use_traffic=True)
@@ -198,7 +204,9 @@ def optimize_route(stores):
             "duration_min": round(dur_s / 60),
             "distance_km":  round(dist_m / 1000, 1),
         }
-    return None, data.get('error_message', data['status'])
+    err = data.get('error_message', data['status'])
+    print(f"[OPTIMIZE] All 3 attempts failed. Final error: {err}")
+    return None, err
 
 
 def get_route_stats(ordered_stores):
@@ -527,18 +535,11 @@ def driver_links(driver_name):
 
   <div class="section">
     <div class="section-title">Navigationslänkar</div>
-
-    <a href="/nav/{driver_name}" style="display:flex;align-items:center;gap:12px;padding:16px;
-       background:#0d2a5a;color:#fff;text-decoration:none;border-radius:10px;
-       font-size:15px;font-weight:700;margin-bottom:14px;border:2px solid #1a73e8">
+    <a href="/nav/{driver_name}" style="display:flex;align-items:center;gap:12px;padding:16px;background:#0d2a5a;color:#fff;text-decoration:none;border-radius:10px;font-size:15px;font-weight:700;margin-bottom:14px;border:2px solid #1a73e8">
       <span style="font-size:26px">📍</span>
-      <div>
-        <div>Steg-för-steg navigation</div>
-        <div style="font-size:12px;font-weight:400;color:#7ab0f0;margin-top:2px">Ser butiksnamn i Google Maps ✓</div>
-      </div>
+      <div><div>Steg-för-steg navigation</div><div style="font-size:12px;font-weight:400;color:#7ab0f0;margin-top:2px">Ser butiksnamn i Google Maps ✓</div></div>
       <span style="margin-left:auto;font-size:20px">›</span>
     </a>
-
     <div class="section-title" style="margin-bottom:10px;margin-top:4px">Hela segmentet (klassisk)</div>
     <div id="map-btns">{link_btns}</div>
 
@@ -700,7 +701,7 @@ async function recalculate() {{
       btn.textContent = '✅ Klar! Räkna om igen';
       status.textContent = `Ny rutt: ${{data.duration}}, ${{data.distance}}`;
       if (data.warning) {{
-        status.textContent += ` (⚠️ Optimering misslyckades, behåller nuvarande ordning)`;
+        status.textContent += ` (⚠️ API-fel vid optimering: ${data.warning})`;
       }}
     }} else {{
       btn.textContent = '🔄 Räkna om med låsta stopp';
@@ -819,11 +820,6 @@ def send_email_to_driver(driver, r, base_url):
 
 @app.route("/nav/<driver_name>")
 def driver_nav(driver_name):
-    """
-    Mobile step-by-step navigation page.
-    Solves the A/B/C/D label problem by opening a single-destination
-    Google Maps link for each stop, so the store name is always visible.
-    """
     r    = state["results"].get(driver_name)
     date = state.get("generated_at", "—")
     if not r or r.get("status") != "ok":
@@ -836,10 +832,7 @@ def driver_nav(driver_name):
     store_objects = r.get("store_objects", [
         {"name": s, "lat": "", "lng": ""} for s in r.get("stores", [])
     ])
-
     wh_lat, wh_lng = WAREHOUSE_COORD.split(',')
-
-    # Full stop list: warehouse → stores → warehouse
     all_stops = [{"name": "🏭 Lager (Uppsala)", "lat": wh_lat, "lng": wh_lng, "is_warehouse": True}]
     all_stops += store_objects
     all_stops += [{"name": "🏭 Lager (Uppsala)", "lat": wh_lat, "lng": wh_lng, "is_warehouse": True}]
@@ -854,10 +847,8 @@ def driver_nav(driver_name):
   <title>Navigering — {driver_name}</title>
   <style>
     *{{box-sizing:border-box;margin:0;padding:0}}
-    body{{font-family:-apple-system,BlinkMacSystemFont,sans-serif;
-          background:#0f111a;color:#e0e6f0;min-height:100vh;display:flex;flex-direction:column}}
-    .header{{background:#161b27;border-bottom:1px solid #1e2d45;
-             padding:14px 16px;display:flex;align-items:center;gap:10px}}
+    body{{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#0f111a;color:#e0e6f0;min-height:100vh;display:flex;flex-direction:column}}
+    .header{{background:#161b27;border-bottom:1px solid #1e2d45;padding:14px 16px;display:flex;align-items:center;gap:10px}}
     .back-btn{{color:#6b7a99;font-size:22px;text-decoration:none;line-height:1}}
     .header-info .driver{{font-size:18px;font-weight:800;color:#fff}}
     .header-info .meta{{font-size:12px;color:#6b7a99;margin-top:2px}}
@@ -867,41 +858,32 @@ def driver_nav(driver_name):
     .status-label{{font-size:11px;color:#6b7a99;text-transform:uppercase;letter-spacing:1px;font-weight:600}}
     .stop-card{{background:#161b27;border-radius:14px;border:2px solid #1e2d45;padding:18px}}
     .stop-card.current-card{{border-color:#f5a623}}
-    .stop-card.next-card{{border-color:#1e2d45;opacity:.8}}
+    .stop-card.next-card{{opacity:.8}}
     .stop-badge{{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:6px}}
     .current-badge{{color:#f5a623}}
     .next-badge{{color:#6b7a99}}
     .stop-number{{font-size:13px;color:#6b7a99;margin-bottom:4px}}
     .stop-name{{font-size:26px;font-weight:800;color:#fff;line-height:1.2;word-break:break-word}}
     .stop-name.warehouse{{font-size:20px;color:#8bc34a}}
-    .btn-nav{{display:flex;align-items:center;justify-content:center;gap:10px;
-              width:100%;padding:18px;border:none;border-radius:12px;
-              background:#1a73e8;color:#fff;font-size:17px;font-weight:700;
-              cursor:pointer;text-decoration:none}}
+    .btn-nav{{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;padding:18px;border:none;border-radius:12px;background:#1a73e8;color:#fff;font-size:17px;font-weight:700;cursor:pointer;text-decoration:none}}
     .btn-nav:active{{background:#1558b0}}
-    .btn-arrived{{display:flex;align-items:center;justify-content:center;gap:10px;
-                  width:100%;padding:16px;border:none;border-radius:12px;
-                  background:#2d6a2d;color:#fff;font-size:16px;font-weight:700;cursor:pointer}}
+    .btn-arrived{{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;padding:16px;border:none;border-radius:12px;background:#2d6a2d;color:#fff;font-size:16px;font-weight:700;cursor:pointer}}
     .btn-arrived:active{{background:#1e4a1e}}
     .btn-arrived.final{{background:#5a2d7a}}
     .stop-list-section{{background:#161b27;border-radius:12px;overflow:hidden}}
-    .stop-list-title{{font-size:11px;color:#6b7a99;text-transform:uppercase;letter-spacing:1px;
-                      padding:12px 14px 8px;border-bottom:1px solid #1e2d45}}
-    .stop-item{{display:flex;align-items:center;padding:10px 14px;
-                border-bottom:1px solid #1a2030;gap:10px}}
+    .stop-list-title{{font-size:11px;color:#6b7a99;text-transform:uppercase;letter-spacing:1px;padding:12px 14px 8px;border-bottom:1px solid #1e2d45}}
+    .stop-item{{display:flex;align-items:center;padding:10px 14px;border-bottom:1px solid #1a2030;gap:10px}}
     .stop-item:last-child{{border-bottom:none}}
     .stop-item.done{{opacity:.35}}
     .stop-item.active-item{{background:#1a2540}}
     .item-num{{font-size:12px;color:#f5a623;font-weight:700;min-width:22px;text-align:right}}
     .item-num.done-num{{color:#2d6a2d}}
     .item-name{{font-size:14px;color:#e0e6f0;flex:1}}
-    .done-screen{{display:none;flex:1;flex-direction:column;align-items:center;
-                  justify-content:center;text-align:center;padding:32px 24px;gap:16px}}
+    .done-screen{{display:none;flex:1;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:32px 24px;gap:16px}}
     .done-icon{{font-size:72px}}
     .done-title{{font-size:28px;font-weight:800;color:#8bc34a}}
     .done-sub{{font-size:15px;color:#6b7a99}}
-    .btn-reset{{padding:14px 28px;background:#333;color:#aaa;border:none;
-                border-radius:8px;font-size:14px;cursor:pointer;margin-top:8px}}
+    .btn-reset{{padding:14px 28px;background:#333;color:#aaa;border:none;border-radius:8px;font-size:14px;cursor:pointer;margin-top:8px}}
   </style>
 </head>
 <body>
@@ -913,7 +895,6 @@ def driver_nav(driver_name):
     </div>
   </div>
   <div class="progress-bar"><div class="progress-fill" id="prog-fill" style="width:0%"></div></div>
-
   <div class="main" id="main-view">
     <div>
       <div class="status-label" style="margin-bottom:8px">Nuvarande destination</div>
@@ -923,16 +904,11 @@ def driver_nav(driver_name):
         <div class="stop-name" id="cur-name"></div>
       </div>
     </div>
-
     <a id="btn-nav" class="btn-nav" href="#" onclick="openNav(event)">
       <span style="font-size:22px">🗺</span>
       <span id="nav-btn-text">Öppna Google Maps navigation</span>
     </a>
-
-    <button class="btn-arrived" id="btn-arrived" onclick="markArrived()">
-      ✅ Framme — nästa stopp
-    </button>
-
+    <button class="btn-arrived" id="btn-arrived" onclick="markArrived()">✅ Framme — nästa stopp</button>
     <div>
       <div class="status-label" style="margin-bottom:8px">Nästa stopp</div>
       <div class="stop-card next-card" id="next-card">
@@ -941,56 +917,32 @@ def driver_nav(driver_name):
         <div class="stop-name" id="nxt-name"></div>
       </div>
     </div>
-
     <div class="stop-list-section">
       <div class="stop-list-title">Alla stopp — {r.get("store_count","?")} butiker</div>
       <div id="stop-list-items"></div>
     </div>
   </div>
-
   <div class="done-screen" id="done-screen">
     <div class="done-icon">🎉</div>
     <div class="done-title">Rutten klar!</div>
     <div class="done-sub">Alla stopp besökta.<br>Bra jobbat, {driver_name}!</div>
     <button class="btn-reset" onclick="resetRoute()">↺ Börja om från lager</button>
   </div>
-
 <script>
 const DRIVER = {driver_json};
 const STOPS  = {stops_json};
 const KEY    = 'nav_v2_' + DRIVER;
-
 let curIdx = parseInt(localStorage.getItem(KEY) || '1', 10);
 if (isNaN(curIdx) || curIdx < 1 || curIdx >= STOPS.length) curIdx = 1;
-
 function save() {{ localStorage.setItem(KEY, curIdx); }}
-
 function openNav(e) {{
   e.preventDefault();
   const s = STOPS[curIdx];
-  let dest = (s.lat && s.lng)
-    ? encodeURIComponent(s.lat + ',' + s.lng)
-    : encodeURIComponent(s.name);
-  // Single destination — NO waypoints = NO A/B/C letters in Google Maps!
-  window.open(
-    'https://www.google.com/maps/dir/?api=1&destination=' + dest + '&travelmode=driving',
-    '_blank'
-  );
+  let dest = (s.lat && s.lng) ? encodeURIComponent(s.lat + ',' + s.lng) : encodeURIComponent(s.name);
+  window.open('https://www.google.com/maps/dir/?api=1&destination=' + dest + '&travelmode=driving', '_blank');
 }}
-
-function markArrived() {{
-  curIdx++;
-  save();
-  render();
-  window.scrollTo(0, 0);
-}}
-
-function resetRoute() {{
-  curIdx = 1;
-  save();
-  render();
-}}
-
+function markArrived() {{ curIdx++; save(); render(); window.scrollTo(0,0); }}
+function resetRoute() {{ curIdx = 1; save(); render(); }}
 function render() {{
   if (curIdx >= STOPS.length) {{
     document.getElementById('main-view').style.display   = 'none';
@@ -999,67 +951,43 @@ function render() {{
     document.getElementById('header-meta').textContent = 'Rutten klar! 🎉';
     return;
   }}
-
   document.getElementById('main-view').style.display   = 'flex';
   document.getElementById('done-screen').style.display = 'none';
-
-  const pct = Math.round(((curIdx - 1) / (STOPS.length - 1)) * 100);
+  const pct = Math.round(((curIdx-1)/(STOPS.length-1))*100);
   document.getElementById('prog-fill').style.width = pct + '%';
-
   const stopsLeft = STOPS.length - 1 - curIdx;
-  document.getElementById('header-meta').textContent =
-    'Stopp ' + curIdx + ' av ' + (STOPS.length - 1) + ' · ' + stopsLeft + ' kvar';
-
-  // Current stop
+  document.getElementById('header-meta').textContent = 'Stopp ' + curIdx + ' av ' + (STOPS.length-1) + ' · ' + stopsLeft + ' kvar';
   const cur = STOPS[curIdx];
-  document.getElementById('cur-num').textContent =
-    (curIdx === STOPS.length - 1) ? 'Slutdestination' : 'Stopp ' + curIdx;
+  document.getElementById('cur-num').textContent = (curIdx===STOPS.length-1) ? 'Slutdestination' : 'Stopp ' + curIdx;
   const curNameEl = document.getElementById('cur-name');
   curNameEl.textContent = cur.name;
   curNameEl.className = 'stop-name' + (cur.is_warehouse ? ' warehouse' : '');
-
-  document.getElementById('nav-btn-text').textContent =
-    'Navigera till ' + cur.name;
-
-  // Arrived button label
+  document.getElementById('nav-btn-text').textContent = 'Navigera till ' + cur.name;
   const arrivedBtn = document.getElementById('btn-arrived');
-  if (curIdx === STOPS.length - 1) {{
+  if (curIdx === STOPS.length-1) {{
     arrivedBtn.textContent = '🏁 Framme på lagret — avsluta rutten';
     arrivedBtn.className = 'btn-arrived final';
   }} else {{
     arrivedBtn.textContent = '✅ Framme — nästa stopp';
     arrivedBtn.className = 'btn-arrived';
   }}
-
-  // Next stop
   const nextIdx = curIdx + 1;
   const nextCard = document.getElementById('next-card');
   if (nextIdx < STOPS.length) {{
-    document.getElementById('nxt-num').textContent =
-      (nextIdx === STOPS.length - 1) ? 'Slutdestination' : 'Stopp ' + nextIdx;
+    document.getElementById('nxt-num').textContent = (nextIdx===STOPS.length-1) ? 'Slutdestination' : 'Stopp ' + nextIdx;
     document.getElementById('nxt-name').textContent = STOPS[nextIdx].name;
     nextCard.style.display = 'block';
-  }} else {{
-    nextCard.style.display = 'none';
-  }}
-
-  // Full stop list (skip first warehouse, show all stores + final warehouse)
-  document.getElementById('stop-list-items').innerHTML =
-    STOPS.slice(1).map((s, i) => {{
-      const idx    = i + 1;
-      const isDone = idx < curIdx;
-      const isNow  = idx === curIdx;
-      return '<div class="stop-item' + (isDone ? ' done' : '') + (isNow ? ' active-item' : '') + '">'
-        + '<span class="item-num' + (isDone ? ' done-num' : '') + '">' + (isDone ? '✓' : idx) + '</span>'
-        + '<span class="item-name">' + s.name + '</span>'
-        + (isNow ? '<span style="color:#f5a623;font-size:14px">▶</span>' : '')
-        + '</div>';
-    }}).join('');
+  }} else {{ nextCard.style.display = 'none'; }}
+  document.getElementById('stop-list-items').innerHTML = STOPS.slice(1).map((s,i) => {{
+    const idx=i+1; const isDone=idx<curIdx; const isNow=idx===curIdx;
+    return '<div class="stop-item'+(isDone?' done':'')+(isNow?' active-item':'')+'"><span class="item-num'+(isDone?' done-num':'')+'">'+( isDone?'✓':idx)+'</span><span class="item-name">'+s.name+'</span>'+(isNow?'<span style="color:#f5a623">▶</span>':'')+'</div>';
+  }}).join('');
 }}
-
 render();
 </script>
 </body></html>"""
+
+
 
 
 @app.route("/api/reorder/<driver_name>", methods=["POST"])
