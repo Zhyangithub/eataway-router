@@ -521,9 +521,14 @@ function render(data) {
     setStatus('running', '⚙ Optimerar rutter via Google Maps API...');
   } else if (hasResults) {
     const errCount = Object.values(results).filter(r => r.status === 'error').length;
+    const trafficCount = Object.values(results).filter(r => r.traffic_aware).length;
+    const totalOk = Object.values(results).filter(r => r.status === 'ok').length;
+    const trafficNote = totalOk > 0
+      ? ` | Trafik: ${trafficCount}/${totalOk} ${trafficCount === 0 ? '⚠ (statisk ETA)' : '✓'}`
+      : '';
     setStatus(errCount ? 'error' : 'ok',
-      errCount ? `⚠ ${errCount} chaufför(er) fick fel — ${generated_at}`
-               : `✓ Alla rutter klara — ${generated_at}`);
+      errCount ? `⚠ ${errCount} chaufför(er) fick fel — ${generated_at}${trafficNote}`
+               : `✓ Alla rutter klara — ${generated_at}${trafficNote}`);
   } else {
     setStatus('idle', 'Inga rutter — klicka Generera Nu för att starta.');
   }
@@ -560,10 +565,14 @@ function renderCard(driver, r, delay, phone) {
       📱 WhatsApp
     </a>` : '';
 
+  const trafficTag = isOk ? (r.traffic_aware
+    ? '<span style="font-size:.55rem;color:var(--ok);letter-spacing:.08em">● TRAFIK</span>'
+    : '<span style="font-size:.55rem;color:var(--warn);letter-spacing:.08em">○ STATISK</span>') : '';
+
   const stats = isOk ? `
     <div class="card-stats">
       <div class="stat"><span class="stat-val">${r.store_count ?? '—'}</span><span class="stat-key">Stopp</span></div>
-      <div class="stat"><span class="stat-val">${r.duration ?? '—'}</span><span class="stat-key">Est. tid</span></div>
+      <div class="stat"><span class="stat-val">${r.duration ?? '—'}</span><span class="stat-key">Est. tid ${trafficTag}</span></div>
       <div class="stat"><span class="stat-val">${r.distance ?? '—'}</span><span class="stat-key">Distans</span></div>
     </div>` : '';
 
