@@ -148,6 +148,27 @@ def load_and_merge_data(driver_name):
     return matched, unmatched
 
 
+def load_coord_dict():
+    """Load name->coords mapping directly from coords source file."""
+    coords_file = 'coords.xlsx' if os.path.exists('coords.xlsx') else 'coords.csv'
+    try:
+        df = pd.read_excel(coords_file, engine='openpyxl')
+    except Exception:
+        return {}
+    header_row_idx = 0
+    for i in range(min(15, len(df))):
+        if any('namn' in str(v).lower() for v in df.iloc[i].tolist()):
+            header_row_idx = i
+            break
+    df.columns = df.iloc[header_row_idx]
+    df = df.iloc[header_row_idx+1:].reset_index(drop=True).iloc[:, :3]
+    df.columns = ['Namn', 'Latitude', 'Longitude']
+    df['match_name'] = df['Namn'].astype(str).str.strip().str.lower()
+    df = df.drop_duplicates(subset=['match_name'], keep='first')
+    return df.set_index('match_name')[['Latitude', 'Longitude']].to_dict('index')
+
+
+
 def optimize_route(stores):
     # Filter out stores with missing coordinates
     valid_stores = [s for s in stores if s.get('lat') and s.get('lng')
@@ -174,14 +195,8 @@ def optimize_route(stores):
         if use_traffic:
             p["departure_time"] = "now"
             p["traffic_model"]  = "best_guess"
-        resp = http_requests.get(
-            "https://maps.googleapis.com/maps/api/directions/json", params=p)
-        data = resp.json()
-        if data["status"] != "OK":
-            print(f"[OPTIMIZE] API failed — status={data['status']} "
-                  f"optimize={optimize} traffic={use_traffic} "
-                  f"error={data.get('error_message', '')}")
-        return data
+        return http_requests.get(
+            "https://maps.googleapis.com/maps/api/directions/json", params=p).json()
 
     # Attempt 1: optimize + traffic (best case)
     data = _call(optimize=True, use_traffic=True)
@@ -204,9 +219,7 @@ def optimize_route(stores):
             "duration_min": round(dur_s / 60),
             "distance_km":  round(dist_m / 1000, 1),
         }
-    err = data.get('error_message', data['status'])
-    print(f"[OPTIMIZE] All 3 attempts failed. Final error: {err}")
-    return None, err
+    return None, data.get('error_message', data['status'])
 
 
 def get_route_stats(ordered_stores):
@@ -817,7 +830,6 @@ def send_email_to_driver(driver, r, base_url):
         print(f"[EMAIL ERROR] {driver}: {traceback.format_exc()}")
         return False, str(e)
 
-
 @app.route("/nav/<driver_name>")
 def driver_nav(driver_name):
     r    = state["results"].get(driver_name)
@@ -836,7 +848,6 @@ def driver_nav(driver_name):
     all_stops = [{"name": "🏭 Lager (Uppsala)", "lat": wh_lat, "lng": wh_lng, "is_warehouse": True}]
     all_stops += store_objects
     all_stops += [{"name": "🏭 Lager (Uppsala)", "lat": wh_lat, "lng": wh_lng, "is_warehouse": True}]
-
     stops_json  = json.dumps(all_stops, ensure_ascii=False)
     driver_json = json.dumps(driver_name)
 
@@ -980,13 +991,15 @@ function render() {{
   }} else {{ nextCard.style.display = 'none'; }}
   document.getElementById('stop-list-items').innerHTML = STOPS.slice(1).map((s,i) => {{
     const idx=i+1; const isDone=idx<curIdx; const isNow=idx===curIdx;
-    return '<div class="stop-item'+(isDone?' done':'')+(isNow?' active-item':'')+'"><span class="item-num'+(isDone?' done-num':'')+'">'+( isDone?'✓':idx)+'</span><span class="item-name">'+s.name+'</span>'+(isNow?'<span style="color:#f5a623">▶</span>':'')+'</div>';
+    return '<div class="stop-item'+(isDone?' done':'')+(isNow?' active-item':'')+'">'
+      +'<span class="item-num'+(isDone?' done-num':'')+'">'+( isDone?'✓':idx)+'</span>'
+      +'<span class="item-name">'+s.name+'</span>'
+      +(isNow?'<span style="color:#f5a623">▶</span>':'')+'</div>';
   }}).join('');
 }}
 render();
 </script>
 </body></html>"""
-
 
 
 
@@ -1007,26 +1020,30 @@ def api_reorder(driver_name):
     if not store_list:
         return jsonify({"ok": False, "error": "Tom butikslista"}), 400
 
-    # ── Patch missing coordinates from saved state ─────────────
-    # This happens when old state was saved without store_objects (no lat/lng).
-    # Build a lookup from the authoritative store_objects in state.
-    saved_objects = state["results"].get(driver_name, {}).get("store_objects", [])
-    coord_lookup  = {s["name"]: s for s in saved_objects if s.get("lat") and s.get("lng")}
-
-    patched_list = []
-    for s in store_list:
-        name = s.get("name", "")
-        lat  = str(s.get("lat", "")).strip()
-        lng  = str(s.get("lng", "")).strip()
-        if lat in ("", "nan", "None") or lng in ("", "nan", "None"):
-            # Coordinates missing — look up from saved state
-            if name in coord_lookup:
-                s = {**coord_lookup[name], "locked": s.get("locked", False)}
-                print(f"[REORDER] Patched missing coords for '{name}' from saved state")
-            else:
-                print(f"[REORDER] WARNING: no coords for '{name}' in saved state — will be skipped by optimizer")
-        patched_list.append(s)
-    store_list = patched_list
+    # ── Patch missing coordinates from source file ──────────────
+    # Happens when last_results.json was saved in old format without lat/lng.
+    needs_patch = any(
+        str(s.get("lat","")).strip() in ("","nan","None") or
+        str(s.get("lng","")).strip() in ("","nan","None")
+        for s in store_list
+    )
+    if needs_patch:
+        coord_dict = load_coord_dict()
+        patched = []
+        for s in store_list:
+            lat = str(s.get("lat","")).strip()
+            lng = str(s.get("lng","")).strip()
+            if lat in ("","nan","None") or lng in ("","nan","None"):
+                key = s.get("name","").strip().lower()
+                if key in coord_dict:
+                    s = {**s,
+                         "lat": str(coord_dict[key]["Latitude"]),
+                         "lng": str(coord_dict[key]["Longitude"])}
+                    print(f"[REORDER] Patched coords for '{s['name']}'")
+                else:
+                    print(f"[REORDER] WARNING: no coords found for '{s.get('name')}'")
+            patched.append(s)
+        store_list = patched
 
     locked_positions = {}   # {index: store_dict}
     unlocked_stores  = []
