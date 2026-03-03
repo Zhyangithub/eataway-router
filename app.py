@@ -4,7 +4,7 @@
 from flask import Flask, jsonify, render_template, request, send_file
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
-import json, os, io, urllib.parse, threading
+import json, os, io, urllib.parse, threading, time as _time
 from datetime import datetime
 import pandas as pd
 import requests as http_requests
@@ -169,8 +169,87 @@ def load_coord_dict():
 
 
 
-def optimize_route(stores):
-    # Filter out stores with missing coordinates
+def _distance_matrix_timed(origins, destinations, departure_ts):
+    """
+    调用 Distance Matrix API，返回 (行×列) 的秒数矩阵。
+    使用 Unix 时间戳强制 Google 按实时/预测路况计算。
+    失败时返回 None。
+    """
+    def _coords(pts):
+        return "|".join(f"{p['lat']},{p['lng']}" for p in pts)
+    params = {
+        "origins":        _coords(origins),
+        "destinations":   _coords(destinations),
+        "key":            API_KEY,
+        "departure_time": str(int(departure_ts)),   # Unix 时间戳，非字符串 "now"
+        "traffic_model":  "best_guess",
+    }
+    try:
+        resp = http_requests.get(
+            "https://maps.googleapis.com/maps/api/distancematrix/json",
+            params=params, timeout=10)
+        data = resp.json()
+        if data["status"] != "OK":
+            print(f"[MATRIX] API status={data['status']} msg={data.get('error_message','')}")
+            return None
+        matrix = []
+        for row in data["rows"]:
+            cols = []
+            for el in row["elements"]:
+                if el["status"] == "OK":
+                    # 优先用实时路况时长，无路况则退而求其次
+                    secs = el.get("duration_in_traffic", el["duration"])["value"]
+                else:
+                    secs = 999999   # 不可达，给极大惩罚值
+                cols.append(secs)
+            matrix.append(cols)
+        return matrix
+    except Exception as e:
+        print(f"[MATRIX] request exception: {e}")
+        return None
+
+
+def _greedy_tsp_from(matrix, start=0):
+    """
+    贪心最近邻 TSP（Nearest Neighbor Heuristic）。
+    从 start 节点出发，每次选未访问中耗时最短的节点。
+    返回完整访问顺序列表（不含起点）。
+    """
+    n = len(matrix)
+    visited = [False] * n
+    visited[start] = True
+    order = []
+    cur = start
+    for _ in range(n - 1):
+        best_j, best_t = -1, float("inf")
+        for j in range(n):
+            if not visited[j] and matrix[cur][j] < best_t:
+                best_j, best_t = j, matrix[cur][j]
+        if best_j == -1:
+            break
+        visited[best_j] = True
+        order.append(best_j)
+        cur = best_j
+    # 补上任何未被访问的节点（理论上不会发生）
+    for j in range(n):
+        if not visited[j]:
+            order.append(j)
+    return order
+
+
+def optimize_route(stores, departure_time=None):
+    """
+    对门店列表进行路线优化。
+
+    departure_time: Unix 时间戳（int/float），None 则使用当前时间。
+                    建议传入司机实际出发时间，例如当天 07:30 的时间戳，
+                    这样 Google 会用该时段的预测路况来优化顺序。
+
+    优化策略（优先级递减）：
+      1. Distance Matrix API + 贪心 TSP（真正路况感知的顺序优化）
+      2. Directions API optimize:true + departure_time（折中方案）
+      3. Directions API optimize:true 无路况（最后兜底）
+    """
     valid_stores = [s for s in stores if s.get('lat') and s.get('lng')
                     and str(s['lat']).strip() not in ('', 'nan', 'None')
                     and str(s['lng']).strip() not in ('', 'nan', 'None')]
@@ -178,42 +257,66 @@ def optimize_route(stores):
     if not valid_stores:
         return None, "Inga butiker med giltiga koordinater"
 
-    # Single store: no API call needed
     if len(valid_stores) == 1:
         return valid_stores, {"duration_min": 0, "distance_km": 0.0}
 
+    # ── 确定出发时间戳 ─────────────────────────────────────
+    dep_ts = int(departure_time) if departure_time else int(_time.time())
+    print(f"[OPTIMIZE] departure={datetime.fromtimestamp(dep_ts).strftime('%Y-%m-%d %H:%M')}, "
+          f"stores={len(valid_stores)}")
+
+    # ── 策略1：Distance Matrix API + 贪心 TSP ─────────────
+    # 节点0=仓库，节点1..n=各门店
+    wh_lat, wh_lng = WAREHOUSE_COORD.split(',')
+    warehouse  = {"lat": wh_lat, "lng": wh_lng}
+    all_nodes  = [warehouse] + valid_stores
+
+    # Distance Matrix 单次最多支持 10×10，超出需分批；此处对多数路线已够用
+    if len(all_nodes) <= 10:
+        matrix = _distance_matrix_timed(all_nodes, all_nodes, dep_ts)
+        if matrix and len(matrix) == len(all_nodes):
+            full_order = _greedy_tsp_from(matrix, start=0)
+            # full_order 中节点 0 为仓库，店铺节点从 1 开始
+            store_order = [idx - 1 for idx in full_order if idx > 0]
+            optimized   = [valid_stores[i] for i in store_order]
+            print(f"[OPTIMIZE] ✓ Traffic-aware TSP order: {store_order}")
+            stats = get_route_stats(optimized)
+            return optimized, stats or {"duration_min": 0, "distance_km": 0.0}
+        print("[OPTIMIZE] Distance Matrix failed, falling back…")
+    else:
+        print(f"[OPTIMIZE] {len(all_nodes)} nodes > 10, skipping Distance Matrix, using Directions")
+
+    # ── 策略2/3：Directions API optimize:true（Fallback）───
     coords = "|".join(f"{s['lat']},{s['lng']}" for s in valid_stores)
 
     def _call(optimize, use_traffic):
         wp = ("optimize:true|" + coords) if optimize else coords
-        p = {
+        p  = {
             "origin":      WAREHOUSE_COORD,
             "destination": WAREHOUSE_COORD,
             "waypoints":   wp,
             "key":         API_KEY,
         }
         if use_traffic:
-            p["departure_time"] = "now"
+            p["departure_time"] = str(int(dep_ts))   # ← Unix 时间戳，而非字符串 "now"
             p["traffic_model"]  = "best_guess"
         return http_requests.get(
-            "https://maps.googleapis.com/maps/api/directions/json", params=p).json()
+            "https://maps.googleapis.com/maps/api/directions/json",
+            params=p, timeout=10).json()
 
-    # Attempt 1: optimize + traffic (best case)
     data = _call(optimize=True, use_traffic=True)
-    # Attempt 2: optimize, no traffic
     if data['status'] != 'OK':
+        print(f"[OPTIMIZE] Directions+traffic failed ({data['status']}), retrying without traffic")
         data = _call(optimize=True, use_traffic=False)
-    # Attempt 3: fixed order, no traffic (most permissive)
     if data['status'] != 'OK':
+        print(f"[OPTIMIZE] Directions+optimize failed ({data['status']}), fixed order fallback")
         data = _call(optimize=False, use_traffic=False)
 
     if data['status'] == 'OK':
         route  = data['routes'][0]
         order  = route.get('waypoint_order', list(range(len(valid_stores))))
         legs   = route['legs']
-        dur_s  = sum(
-            l.get('duration_in_traffic', l['duration'])['value']
-            for l in legs)
+        dur_s  = sum(l.get('duration_in_traffic', l['duration'])['value'] for l in legs)
         dist_m = sum(l['distance']['value'] for l in legs)
         return [valid_stores[i] for i in order], {
             "duration_min": round(dur_s / 60),
@@ -300,15 +403,27 @@ def generate_urls(optimized_stores):
 
 def run_all_drivers():
     results = {}
+
+    # 计算出发时间戳：优先用计划出发时间（schedule_hour:schedule_minute）；
+    # 若该时间已过，则用当前时间（手动触发 generate 时的即时路况）。
+    now    = datetime.now()
+    dep_dt = now.replace(
+        hour=state.get("schedule_hour", 7),
+        minute=state.get("schedule_minute", 0),
+        second=0, microsecond=0,
+    )
+    dep_ts = int(dep_dt.timestamp()) if dep_dt > now else int(_time.time())
+    print(f"[RUN_ALL] departure_time={dep_dt.strftime('%H:%M')} (ts={dep_ts})")
+
     for driver in DRIVERS:
         try:
             stores, unmatched = load_and_merge_data(driver)
             if not stores:
-                err = unmatched if isinstance(unmatched, str) else f"未匹配到任何门店"
+                err = unmatched if isinstance(unmatched, str) else "未匹配到任何门店"
                 results[driver] = {"status": "error", "error": err}
                 continue
 
-            optimized, stats_or_err = optimize_route(stores)
+            optimized, stats_or_err = optimize_route(stores, departure_time=dep_ts)
             if not optimized:
                 results[driver] = {"status": "error", "error": str(stats_or_err)}
                 continue
@@ -358,7 +473,7 @@ def index():
 
 @app.route("/api/status")
 def api_status():
-    return jsonify({
+    resp = jsonify({
         "results":         state["results"],
         "generated_at":    state["generated_at"],
         "schedule_hour":   state["schedule_hour"],
@@ -368,6 +483,10 @@ def api_status():
         "phones":          driver_phones,
         "emails":          driver_emails,
     })
+    # 禁止浏览器/代理缓存路线结果
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"]        = "no-cache"
+    return resp
 
 
 @app.route("/api/generate", methods=["POST"])
