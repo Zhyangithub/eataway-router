@@ -272,7 +272,7 @@ def optimize_route(stores, departure_time=None):
     all_nodes  = [warehouse] + valid_stores
 
     # Distance Matrix 单次最多支持 10×10，超出需分批；此处对多数路线已够用
-    if len(all_nodes) <= 10:
+    if len(all_nodes) <= 25:
         matrix = _distance_matrix_timed(all_nodes, all_nodes, dep_ts)
         if matrix and len(matrix) == len(all_nodes):
             full_order = _greedy_tsp_from(matrix, start=0)
