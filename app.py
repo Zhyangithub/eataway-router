@@ -4,8 +4,9 @@
 from flask import Flask, jsonify, render_template, request, send_file
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
-import json, os, io, urllib.parse, threading, time as _time
-from datetime import datetime
+import json, os, io, urllib.parse, threading, time as _time, traceback
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 import pandas as pd
 import requests as http_requests
 import openpyxl
@@ -247,6 +248,89 @@ def _greedy_tsp_from(matrix, start=0):
     return order
 
 
+def _routes_api_v2(stores, departure_ts, optimize=True):
+    """
+    Google Routes API v2 (computeRoutes) — 比 Directions API 更可靠的路况支持。
+    返回 (waypoint_order, duration_sec, distance_m, has_traffic) 或 None。
+    """
+    wh_lat, wh_lng = WAREHOUSE_COORD.split(',')
+    intermediates = [
+        {"location": {"latLng": {"latitude": float(s['lat']), "longitude": float(s['lng'])}}}
+        for s in stores
+    ]
+    dt = datetime.fromtimestamp(departure_ts, tz=timezone.utc)
+    body = {
+        "origin":      {"location": {"latLng": {"latitude": float(wh_lat), "longitude": float(wh_lng)}}},
+        "destination": {"location": {"latLng": {"latitude": float(wh_lat), "longitude": float(wh_lng)}}},
+        "intermediates": intermediates,
+        "travelMode": "DRIVE",
+        "routingPreference": "TRAFFIC_AWARE",
+        "optimizeWaypointOrder": optimize,
+        "departureTime": dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": API_KEY,
+        "X-Goog-FieldMask": (
+            "routes.duration,routes.distanceMeters,"
+            "routes.optimizedIntermediateWaypointIndex,"
+            "routes.legs.duration,routes.legs.distanceMeters,routes.legs.staticDuration"
+        ),
+    }
+    try:
+        resp = http_requests.post(
+            "https://routes.googleapis.com/directions/v2:computeRoutes",
+            json=body, headers=headers, timeout=15,
+        )
+        data = resp.json()
+        if "error" in data:
+            print(f"[ROUTES_V2] API error: {data['error'].get('message','unknown')}")
+            return None
+        if "routes" not in data or not data["routes"]:
+            print(f"[ROUTES_V2] No routes returned: {json.dumps(data)[:300]}")
+            return None
+
+        route = data["routes"][0]
+        order = route.get("optimizedIntermediateWaypointIndex", list(range(len(stores))))
+
+        # 总时长（含路况）格式为 "1234s"
+        dur_str = route.get("duration", "0s")
+        dur_s = int(dur_str.rstrip("s"))
+
+        # 静态时长（不含路况），用于判断是否使用了路况
+        legs = route.get("legs", [])
+        static_total = sum(int(leg.get("staticDuration", "0s").rstrip("s")) for leg in legs)
+
+        has_traffic = abs(dur_s - static_total) > 5  # 差异 > 5s 视为路况生效
+
+        dist_m = route.get("distanceMeters", 0)
+        diff = dur_s - static_total
+        print(f"[ROUTES_V2] ✓ dur={dur_s}s static={static_total}s diff={diff:+d}s "
+              f"dist={round(dist_m/1000,1)}km traffic_aware={has_traffic} "
+              f"order={order}")
+        return order, dur_s, dist_m, has_traffic
+    except Exception as e:
+        print(f"[ROUTES_V2] Error: {e}")
+        return None
+
+
+def _routes_api_v2_stats(ordered_stores, departure_ts):
+    """
+    用 Routes API v2 获取已排序路线的路况统计（不做优化）。
+    返回 stats dict 或 None。
+    """
+    result = _routes_api_v2(ordered_stores, departure_ts, optimize=False)
+    if result is None:
+        return None
+    _, dur_s, dist_m, has_traffic = result
+    return {
+        "duration_min": round(dur_s / 60),
+        "duration_sec": dur_s,
+        "distance_km":  round(dist_m / 1000, 1),
+        "traffic_aware": has_traffic,
+    }
+
+
 def optimize_route(stores, departure_time=None):
     """
     对门店列表进行路线优化。
@@ -270,6 +354,21 @@ def optimize_route(stores, departure_time=None):
     dep_ts = int(departure_time) if departure_time else int(_time.time())
     print(f"[OPTIMIZE] departure={datetime.fromtimestamp(dep_ts).strftime('%Y-%m-%d %H:%M:%S')}, "
           f"stores={len(valid_stores)}")
+
+    # ── 策略0：Routes API v2（最佳路况支持）──────────────
+    if len(valid_stores) <= 25:
+        result = _routes_api_v2(valid_stores, dep_ts, optimize=True)
+        if result:
+            order, dur_s, dist_m, has_traffic = result
+            optimized = [valid_stores[i] for i in order]
+            print(f"[OPTIMIZE] ✓ Routes API v2 成功, traffic_aware={has_traffic}")
+            return optimized, {
+                "duration_min": round(dur_s / 60),
+                "duration_sec": dur_s,
+                "distance_km":  round(dist_m / 1000, 1),
+                "traffic_aware": has_traffic,
+            }
+        print("[OPTIMIZE] Routes API v2 失败, 回退到 Distance Matrix…")
 
     # ── 策略1：Distance Matrix API + 贪心 TSP ─────────────
     wh_lat, wh_lng = WAREHOUSE_COORD.split(',')
@@ -348,8 +447,16 @@ def get_route_stats(ordered_stores, departure_time=None):
         return {"duration_min": 0, "duration_sec": 0, "distance_km": 0.0, "traffic_aware": False}
 
     # ★ 始终用当前实时时间戳，确保 Google 返回最新路况
-    dep_ts = str(int(_time.time()))
+    now_ts = int(_time.time())
 
+    # Attempt 0: Routes API v2（路况更可靠）
+    if len(ordered_stores) <= 25:
+        v2_stats = _routes_api_v2_stats(ordered_stores, now_ts)
+        if v2_stats:
+            return v2_stats
+        print("[STATS] Routes API v2 失败, 回退到 Directions API")
+
+    dep_ts = str(now_ts)
     waypoints_str = "|".join(f"{s['lat']},{s['lng']}" for s in ordered_stores)
 
     # Attempt 1: with real-time traffic
@@ -512,11 +619,15 @@ def do_generate():
         state["running"] = False
 
 
+STOCKHOLM_TZ = ZoneInfo("Europe/Stockholm")
+
 def reschedule(hour, minute):
     if scheduler.get_job("daily_gen"):
         scheduler.remove_job("daily_gen")
-    scheduler.add_job(do_generate, CronTrigger(hour=hour, minute=minute),
+    scheduler.add_job(do_generate,
+                      CronTrigger(hour=hour, minute=minute, timezone=STOCKHOLM_TZ),
                       id="daily_gen", replace_existing=True)
+    print(f"[SCHEDULER] Scheduled daily_gen at {hour:02d}:{minute:02d} Europe/Stockholm")
 
 
 # ── Flask 路由 ───────────────────────────────────────────────

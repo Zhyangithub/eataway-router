@@ -464,11 +464,78 @@ function openWA(driver, r) {
 
 function sendAllWA() {
   if (!currentData?.results) return;
-  const drivers = currentData.drivers || [];
-  drivers.forEach(d => {
+  const drivers = (currentData.drivers || []).filter(d => {
     const r = currentData.results[d];
-    if (r?.status === 'ok') openWA(d, r);
+    const phone = currentData?.phones?.[d];
+    return r?.status === 'ok' && phone;
   });
+  if (!drivers.length) return alert('Inga chaufförer med telefonnummer och klara rutter.');
+  showWAModal(drivers);
+}
+
+function showWAModal(drivers) {
+  // Remove existing modal if any
+  const old = document.getElementById('wa-modal');
+  if (old) old.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'wa-modal';
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px)';
+
+  const box = document.createElement('div');
+  box.style.cssText = 'background:var(--panel);border:1px solid var(--border);padding:1.5rem 2rem;min-width:340px;max-width:440px;font-family:var(--sans)';
+
+  const title = document.createElement('div');
+  title.style.cssText = 'font-family:var(--cond);font-weight:900;font-size:1.2rem;color:#fff;letter-spacing:.08em;margin-bottom:1rem';
+  title.textContent = 'SKICKA WHATSAPP';
+  box.appendChild(title);
+
+  const hint = document.createElement('div');
+  hint.style.cssText = 'font-family:var(--mono);font-size:.7rem;color:var(--muted);margin-bottom:1rem';
+  hint.textContent = 'Klicka på varje chaufför för att öppna WhatsApp. Webbläsaren tillåter bara ett fönster per klick.';
+  box.appendChild(hint);
+
+  const list = document.createElement('div');
+  list.style.cssText = 'display:flex;flex-direction:column;gap:.5rem;margin-bottom:1rem';
+
+  drivers.forEach(d => {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:.8rem';
+
+    const btn = document.createElement('button');
+    btn.className = 'btn-wa-sm';
+    btn.style.cssText = 'flex:1;justify-content:center;padding:.5rem .8rem;font-size:.75rem';
+    btn.textContent = `Skicka till ${d}`;
+    btn.onclick = () => {
+      const r = currentData.results[d];
+      openWA(d, r);
+      btn.textContent = `✓ ${d} — öppnad`;
+      btn.style.background = 'rgba(37,211,102,.2)';
+      btn.style.borderColor = 'var(--wa)';
+      btn.disabled = true;
+      // Check if all sent
+      const allBtns = list.querySelectorAll('button');
+      const allDone = [...allBtns].every(b => b.disabled);
+      if (allDone) {
+        setTimeout(() => overlay.remove(), 800);
+      }
+    };
+
+    row.appendChild(btn);
+    list.appendChild(row);
+  });
+  box.appendChild(list);
+
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'btn btn-secondary';
+  closeBtn.style.cssText = 'width:100%;font-size:.8rem;padding:.5rem';
+  closeBtn.textContent = 'Stäng';
+  closeBtn.onclick = () => overlay.remove();
+  box.appendChild(closeBtn);
+
+  overlay.appendChild(box);
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
 }
 
 
