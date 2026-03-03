@@ -342,10 +342,18 @@ async function triggerGenerate() {
   const btn = document.getElementById('btn-generate');
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span> Kör...';
+  // ★ 先清空旧结果，让用户清楚地看到正在重新计算
+  setStatus('running', '⚙ Skickar förfrågan...');
   const res = await fetch('/api/generate', { method: 'POST' });
   const d = await res.json();
-  if (d.ok) startPolling();
-  else { btn.disabled = false; btn.innerHTML = '▶ Generera Nu'; setStatus('error', d.message); }
+  if (d.ok) {
+    setStatus('running', '⚙ Optimerar rutter med realtidstrafik...');
+    startPolling();
+  } else {
+    btn.disabled = false;
+    btn.innerHTML = '▶ Generera Nu';
+    setStatus('error', d.message);
+  }
 }
 
 
@@ -469,7 +477,8 @@ function exportExcel() { window.location.href = '/api/export'; }
 
 // ── Polling ──
 async function fetchAndRender() {
-  const data = await fetch('/api/status').then(r => r.json());
+  // ★ cache-bust: 防止浏览器缓存旧的 /api/status 响应
+  const data = await fetch('/api/status?_=' + Date.now()).then(r => r.json());
   currentData = data;
   render(data);
   if (!data.running) { clearInterval(polling); polling = null; }
@@ -477,6 +486,8 @@ async function fetchAndRender() {
 
 function startPolling() {
   setStatus('running', '⚙ Optimerar rutter via Google Maps API...');
+  // ★ 立刻执行一次，不等 1500ms，避免后端跑完时漏掉更新
+  fetchAndRender();
   if (!polling) polling = setInterval(fetchAndRender, 1500);
 }
 
@@ -697,7 +708,8 @@ async function sendAllEmail() {
 
 // ── Init ──
 (async () => {
-  const data = await fetch('/api/status').then(r => r.json());
+  // ★ cache-bust 防止浏览器缓存初始状态
+  const data = await fetch('/api/status?_=' + Date.now()).then(r => r.json());
   currentData = data;
   render(data);
   if (data.running) startPolling();
