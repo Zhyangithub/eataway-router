@@ -280,7 +280,7 @@ def optimize_route(stores, departure_time=None):
             store_order = [idx - 1 for idx in full_order if idx > 0]
             optimized   = [valid_stores[i] for i in store_order]
             print(f"[OPTIMIZE] ✓ Traffic-aware TSP order: {store_order}")
-            stats = get_route_stats(optimized)
+            stats = get_route_stats(optimized, departure_time=dep_ts)
             return optimized, stats or {"duration_min": 0, "distance_km": 0.0}
         print("[OPTIMIZE] Distance Matrix failed, falling back…")
     else:
@@ -325,34 +325,46 @@ def optimize_route(stores, departure_time=None):
     return None, data.get('error_message', data['status'])
 
 
-def get_route_stats(ordered_stores):
-    """Calculate duration/distance for a fixed (already-ordered) route."""
+def get_route_stats(ordered_stores, departure_time=None):
+    """
+    Calculate duration/distance for a fixed (already-ordered) route.
+
+    departure_time: Unix 时间戳（int）。传入具体时间戳可避免 Google
+                    对相同 waypoints + "now" 请求返回缓存结果。
+                    None → 使用当前时间。
+    """
     if not ordered_stores:
         return {"duration_min": 0, "distance_km": 0.0}
+
+    # ★ 关键：用 Unix 时间戳而非字符串 "now"，强制 Google 按实际时刻计算
+    dep_ts = str(int(departure_time)) if departure_time else str(int(_time.time()))
+
     waypoints_str = "|".join(f"{s['lat']},{s['lng']}" for s in ordered_stores)
 
-    # Attempt 1: with traffic
+    # Attempt 1: with real-time traffic
     params = {
-        "origin":        WAREHOUSE_COORD,
-        "destination":   WAREHOUSE_COORD,
-        "waypoints":     waypoints_str,
-        "key":           API_KEY,
-        "departure_time": "now",
-        "traffic_model": "best_guess",
+        "origin":         WAREHOUSE_COORD,
+        "destination":    WAREHOUSE_COORD,
+        "waypoints":      waypoints_str,
+        "key":            API_KEY,
+        "departure_time": dep_ts,          # ← Unix 时间戳，非 "now"
+        "traffic_model":  "best_guess",
     }
     try:
         resp = http_requests.get(
-            "https://maps.googleapis.com/maps/api/directions/json", params=params)
+            "https://maps.googleapis.com/maps/api/directions/json",
+            params=params, timeout=10)
         data = resp.json()
         if data["status"] == "OK":
             legs   = data["routes"][0]["legs"]
             dur_s  = sum(l.get("duration_in_traffic", l["duration"])["value"] for l in legs)
             dist_m = sum(l["distance"]["value"] for l in legs)
+            print(f"[STATS] OK (traffic) dep={dep_ts} dur={round(dur_s/60)}min dist={round(dist_m/1000,1)}km")
             return {"duration_min": round(dur_s / 60), "distance_km": round(dist_m / 1000, 1)}
     except Exception as e:
         print(f"[STATS] traffic call failed: {e}")
 
-    # Attempt 2: without traffic (more permissive)
+    # Attempt 2: without traffic (fallback)
     params2 = {
         "origin":      WAREHOUSE_COORD,
         "destination": WAREHOUSE_COORD,
@@ -361,12 +373,14 @@ def get_route_stats(ordered_stores):
     }
     try:
         resp2 = http_requests.get(
-            "https://maps.googleapis.com/maps/api/directions/json", params=params2)
+            "https://maps.googleapis.com/maps/api/directions/json",
+            params=params2, timeout=10)
         data2 = resp2.json()
         if data2["status"] == "OK":
             legs   = data2["routes"][0]["legs"]
             dur_s  = sum(l["duration"]["value"] for l in legs)
             dist_m = sum(l["distance"]["value"] for l in legs)
+            print(f"[STATS] OK (no traffic) dur={round(dur_s/60)}min dist={round(dist_m/1000,1)}km")
             return {"duration_min": round(dur_s / 60), "distance_km": round(dist_m / 1000, 1)}
     except Exception as e:
         print(f"[STATS] fallback call failed: {e}")
@@ -1203,7 +1217,7 @@ def api_reorder(driver_name):
     final = [s for s in final if s is not None]
 
     # ── Get accurate stats for the complete merged route ───────
-    stats = get_route_stats(final)
+    stats = get_route_stats(final, departure_time=int(_time.time()))
 
     urls = generate_urls(final)
 
