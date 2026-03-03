@@ -328,6 +328,7 @@
 <script>
 let polling = null;
 let currentData = null;
+let pollStartedAt = 0;   // ★ 防止竞态：记录轮询开始时间
 
 // ── Clock ──
 (function clock() {
@@ -481,13 +482,21 @@ async function fetchAndRender() {
   const data = await fetch('/api/status?_=' + Date.now()).then(r => r.json());
   currentData = data;
   render(data);
-  if (!data.running) { clearInterval(polling); polling = null; }
+  // ★ FIX: 仅在轮询启动 3 秒后才允许停止轮询。
+  //   解决竞态条件：后端线程可能还没来得及设置 running=True，
+  //   导致首次轮询拿到 running=false + 旧结果后立刻停止。
+  const elapsed = Date.now() - pollStartedAt;
+  if (!data.running && elapsed > 3000) {
+    clearInterval(polling);
+    polling = null;
+  }
 }
 
 function startPolling() {
   setStatus('running', '⚙ Optimerar rutter via Google Maps API...');
-  // ★ 立刻执行一次，不等 1500ms，避免后端跑完时漏掉更新
-  fetchAndRender();
+  pollStartedAt = Date.now();
+  // ★ FIX: 不立刻执行 fetchAndRender()，等 1.5s 后再首次轮询，
+  //   给后端线程足够时间设置 running=True 并开始计算。
   if (!polling) polling = setInterval(fetchAndRender, 1500);
 }
 

@@ -461,9 +461,9 @@ def run_all_drivers():
 
 # ── 后台任务 ─────────────────────────────────────────────────
 def do_generate():
-    if state["running"]:
-        return
-    state["running"] = True
+    # ★ running 已在 api_generate() 中设为 True（避免竞态）
+    if not state["running"]:
+        state["running"] = True
     try:
         state["results"]      = run_all_drivers()
         state["generated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -507,6 +507,11 @@ def api_status():
 def api_generate():
     if state["running"]:
         return jsonify({"ok": False, "message": "Already running"}), 409
+    # ★ FIX: 在启动线程之前设置 running=True，避免竞态条件：
+    #   前端收到 ok 后立刻轮询 /api/status，如果线程还没来得及
+    #   执行 do_generate() 里的 state["running"]=True，前端会
+    #   看到 running=false + 旧结果，从而立刻停止轮询。
+    state["running"] = True
     threading.Thread(target=do_generate, daemon=True).start()
     return jsonify({"ok": True})
 
