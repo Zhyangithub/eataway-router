@@ -1007,6 +1007,27 @@ def api_reorder(driver_name):
     if not store_list:
         return jsonify({"ok": False, "error": "Tom butikslista"}), 400
 
+    # ── Patch missing coordinates from saved state ─────────────
+    # This happens when old state was saved without store_objects (no lat/lng).
+    # Build a lookup from the authoritative store_objects in state.
+    saved_objects = state["results"].get(driver_name, {}).get("store_objects", [])
+    coord_lookup  = {s["name"]: s for s in saved_objects if s.get("lat") and s.get("lng")}
+
+    patched_list = []
+    for s in store_list:
+        name = s.get("name", "")
+        lat  = str(s.get("lat", "")).strip()
+        lng  = str(s.get("lng", "")).strip()
+        if lat in ("", "nan", "None") or lng in ("", "nan", "None"):
+            # Coordinates missing — look up from saved state
+            if name in coord_lookup:
+                s = {**coord_lookup[name], "locked": s.get("locked", False)}
+                print(f"[REORDER] Patched missing coords for '{name}' from saved state")
+            else:
+                print(f"[REORDER] WARNING: no coords for '{name}' in saved state — will be skipped by optimizer")
+        patched_list.append(s)
+    store_list = patched_list
+
     locked_positions = {}   # {index: store_dict}
     unlocked_stores  = []
 
