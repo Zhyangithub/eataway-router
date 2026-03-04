@@ -171,51 +171,87 @@ def load_coord_dict():
 
 def _distance_matrix_timed(origins, destinations, departure_ts):
     """
-    调用 Distance Matrix API，返回 (行×列) 的秒数矩阵 + 是否使用了路况数据。
-    使用 Unix 时间戳强制 Google 按实时/预测路况计算。
+    调用 Routes API v2 (Compute Route Matrix) 获取实时路况距离矩阵。
+    支持单次请求最多 625 个元素 (25×25)，比旧版 Distance Matrix API 的 100 限制大幅提升。
+    返回 (行×列) 的秒数矩阵 + 是否使用了路况数据。
     失败时返回 None, False。
     """
-    def _coords(pts):
-        return "|".join(f"{p['lat']},{p['lng']}" for p in pts)
-    params = {
-        "origins":        _coords(origins),
-        "destinations":   _coords(destinations),
-        "key":            API_KEY,
-        "departure_time": str(int(departure_ts)),   # Unix 时间戳，非字符串 "now"
-        "traffic_model":  "best_guess",
+    from datetime import timezone as _tz
+
+    n_orig = len(origins)
+    n_dest = len(destinations)
+
+    # 构建 waypoints
+    def _make_waypoints(pts):
+        return [
+            {"waypoint": {"location": {"latLng": {
+                "latitude":  float(p["lat"]),
+                "longitude": float(p["lng"]),
+            }}}}
+            for p in pts
+        ]
+
+    # departure_time 需要 RFC3339 格式
+    dep_rfc3339 = datetime.fromtimestamp(departure_ts, tz=_tz.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    body = {
+        "origins":            _make_waypoints(origins),
+        "destinations":       _make_waypoints(destinations),
+        "travelMode":         "DRIVE",
+        "routingPreference":  "TRAFFIC_AWARE",     # ← 使用实时路况
+        "departureTime":      dep_rfc3339,
     }
+
+    headers = {
+        "Content-Type":     "application/json",
+        "X-Goog-Api-Key":   API_KEY,
+        "X-Goog-FieldMask": "originIndex,destinationIndex,duration,distanceMeters,status,condition",
+    }
+
     try:
-        resp = http_requests.get(
-            "https://maps.googleapis.com/maps/api/distancematrix/json",
-            params=params, timeout=10)
-        data = resp.json()
-        if data["status"] != "OK":
-            print(f"[MATRIX] API status={data['status']} msg={data.get('error_message','')}")
+        resp = http_requests.post(
+            "https://routes.googleapis.com/distanceMatrix/v2:computeRouteMatrix",
+            json=body, headers=headers, timeout=30,
+        )
+
+        if resp.status_code != 200:
+            print(f"[MATRIX-v2] HTTP {resp.status_code}: {resp.text[:500]}")
             return None, False
-        matrix = []
-        traffic_count = 0
-        static_count  = 0
-        for row in data["rows"]:
-            cols = []
-            for el in row["elements"]:
-                if el["status"] == "OK":
-                    if "duration_in_traffic" in el:
-                        secs = el["duration_in_traffic"]["value"]
-                        traffic_count += 1
-                    else:
-                        secs = el["duration"]["value"]
-                        static_count += 1
-                else:
-                    secs = 999999
-                cols.append(secs)
-            matrix.append(cols)
-        has_traffic = traffic_count > 0
-        print(f"[MATRIX] ✓ {len(matrix)}×{len(matrix[0])} matrix — "
-              f"traffic_cells={traffic_count}, static_cells={static_count}, "
-              f"traffic_aware={has_traffic}")
+
+        elements = resp.json()
+
+        if not isinstance(elements, list):
+            print(f"[MATRIX-v2] unexpected response: {str(elements)[:500]}")
+            return None, False
+
+        # 初始化 N×N 矩阵
+        matrix = [[999999] * n_dest for _ in range(n_orig)]
+        ok_count   = 0
+        fail_count = 0
+
+        for el in elements:
+            oi = el.get("originIndex", 0)
+            di = el.get("destinationIndex", 0)
+            condition = el.get("condition", "")
+
+            if condition == "ROUTE_EXISTS" and "duration" in el:
+                # duration 格式为 "1234s"，解析为秒数
+                dur_str = el["duration"]  # e.g. "1234s"
+                secs = int(dur_str.rstrip("s")) if isinstance(dur_str, str) else 0
+                matrix[oi][di] = secs
+                ok_count += 1
+            else:
+                fail_count += 1
+
+        # Routes API 使用 TRAFFIC_AWARE 时，返回的 duration 已经包含路况
+        has_traffic = ok_count > 0
+        print(f"[MATRIX-v2] ✓ {n_orig}×{n_dest} matrix — "
+              f"ok_cells={ok_count}, failed_cells={fail_count}, "
+              f"traffic_aware={has_traffic} (TRAFFIC_AWARE mode)")
         return matrix, has_traffic
+
     except Exception as e:
-        print(f"[MATRIX] request exception: {e}")
+        print(f"[MATRIX-v2] request exception: {e}")
         return None, False
 
 
