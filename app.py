@@ -169,19 +169,15 @@ def load_coord_dict():
 
 
 
-def _distance_matrix_timed(origins, destinations, departure_ts):
+def _distance_matrix_routes_v2(origins, destinations, departure_ts):
     """
-    调用 Routes API v2 (Compute Route Matrix) 获取实时路况距离矩阵。
-    支持单次请求最多 625 个元素 (25×25)，比旧版 Distance Matrix API 的 100 限制大幅提升。
-    返回 (行×列) 的秒数矩阵 + 是否使用了路况数据。
+    策略 A: 调用 Routes API v2 (Compute Route Matrix)。
+    支持单次请求最多 625 个元素 (25×25)，返回实时路况。
     失败时返回 None, False。
     """
-    from datetime import timezone as _tz
-
     n_orig = len(origins)
     n_dest = len(destinations)
 
-    # 构建 waypoints
     def _make_waypoints(pts):
         return [
             {"waypoint": {"location": {"latLng": {
@@ -191,16 +187,13 @@ def _distance_matrix_timed(origins, destinations, departure_ts):
             for p in pts
         ]
 
-    # departure_time 需要 RFC3339 格式
-    dep_rfc3339 = datetime.fromtimestamp(departure_ts, tz=_tz.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
     body = {
         "origins":            _make_waypoints(origins),
         "destinations":       _make_waypoints(destinations),
         "travelMode":         "DRIVE",
-        "routingPreference":  "TRAFFIC_AWARE",     # ← 使用实时路况
-        "departureTime":      dep_rfc3339,
+        "routingPreference":  "TRAFFIC_AWARE",
     }
+    # 不设 departureTime — Google 默认使用当前时间，等价于 "now"
 
     headers = {
         "Content-Type":     "application/json",
@@ -208,51 +201,157 @@ def _distance_matrix_timed(origins, destinations, departure_ts):
         "X-Goog-FieldMask": "originIndex,destinationIndex,duration,distanceMeters,status,condition",
     }
 
+    print(f"[MATRIX-v2] Requesting {n_orig}x{n_dest} matrix ({n_orig*n_dest} elements)")
+
     try:
         resp = http_requests.post(
             "https://routes.googleapis.com/distanceMatrix/v2:computeRouteMatrix",
             json=body, headers=headers, timeout=30,
         )
 
-        if resp.status_code != 200:
-            print(f"[MATRIX-v2] HTTP {resp.status_code}: {resp.text[:500]}")
+        print(f"[MATRIX-v2] HTTP {resp.status_code}, content-length={len(resp.text)}")
+
+        # 尝试解析 JSON，无论状态码（流式响应可能在非200时也返回有效数据）
+        try:
+            elements = resp.json()
+        except Exception as parse_err:
+            print(f"[MATRIX-v2] ✗ JSON parse failed: {parse_err}")
+            print(f"[MATRIX-v2] ✗ Raw body: {resp.text[:2000]}")
             return None, False
 
-        elements = resp.json()
+        # 如果返回的是错误对象 {"error": {...}}
+        if isinstance(elements, dict) and "error" in elements:
+            err = elements["error"]
+            print(f"[MATRIX-v2] ✗ API error: code={err.get('code')} "
+                  f"status={err.get('status')} msg={err.get('message','')[:500]}")
+            return None, False
 
         if not isinstance(elements, list):
-            print(f"[MATRIX-v2] unexpected response: {str(elements)[:500]}")
+            print(f"[MATRIX-v2] ✗ unexpected type={type(elements).__name__}: {str(elements)[:500]}")
             return None, False
 
-        # 初始化 N×N 矩阵
+        # 解析元素
         matrix = [[999999] * n_dest for _ in range(n_orig)]
-        ok_count   = 0
-        fail_count = 0
+        ok_count = 0
+        err_count = 0
 
         for el in elements:
             oi = el.get("originIndex", 0)
             di = el.get("destinationIndex", 0)
-            condition = el.get("condition", "")
 
-            if condition == "ROUTE_EXISTS" and "duration" in el:
-                # duration 格式为 "1234s"，解析为秒数
-                dur_str = el["duration"]  # e.g. "1234s"
+            # 检查元素级别的错误
+            el_status = el.get("status", {})
+            if isinstance(el_status, dict) and el_status.get("code", 0) != 0:
+                if err_count < 3:
+                    print(f"[MATRIX-v2] element [{oi}][{di}] error: {el_status}")
+                err_count += 1
+                continue
+
+            if "duration" in el:
+                dur_str = el["duration"]
                 secs = int(dur_str.rstrip("s")) if isinstance(dur_str, str) else 0
                 matrix[oi][di] = secs
                 ok_count += 1
-            else:
-                fail_count += 1
 
-        # Routes API 使用 TRAFFIC_AWARE 时，返回的 duration 已经包含路况
-        has_traffic = ok_count > 0
-        print(f"[MATRIX-v2] ✓ {n_orig}×{n_dest} matrix — "
-              f"ok_cells={ok_count}, failed_cells={fail_count}, "
-              f"traffic_aware={has_traffic} (TRAFFIC_AWARE mode)")
-        return matrix, has_traffic
+        if ok_count == 0:
+            print(f"[MATRIX-v2] ✗ 0 ok cells in {len(elements)} elements, errors={err_count}")
+            if elements:
+                print(f"[MATRIX-v2] ✗ First element: {str(elements[0])[:500]}")
+            return None, False
+
+        print(f"[MATRIX-v2] ✓ {n_orig}x{n_dest} matrix — ok={ok_count}, "
+              f"err={err_count}, traffic_aware=True")
+        return matrix, True
 
     except Exception as e:
-        print(f"[MATRIX-v2] request exception: {e}")
+        import traceback
+        print(f"[MATRIX-v2] ✗ exception: {e}\n{traceback.format_exc()}")
         return None, False
+
+
+def _distance_matrix_legacy_chunked(origins, destinations, departure_ts):
+    """
+    策略 B: 旧版 Distance Matrix API 分块请求。
+    每块 ≤ 100 元素，自动拆分大矩阵。
+    """
+    MAX_ELEMENTS = 100
+
+    def _coords(pts):
+        return "|".join(f"{p['lat']},{p['lng']}" for p in pts)
+
+    n_orig = len(origins)
+    n_dest = len(destinations)
+    chunk_rows = max(1, MAX_ELEMENTS // n_dest)
+    total_chunks = (n_orig + chunk_rows - 1) // chunk_rows
+    print(f"[MATRIX-legacy] Splitting into {total_chunks} chunks of {chunk_rows} rows × {n_dest} cols "
+          f"= {chunk_rows * n_dest} elements/chunk")
+
+    full_matrix = []
+    traffic_count = 0
+    static_count  = 0
+
+    for i in range(0, n_orig, chunk_rows):
+        chunk_origins = origins[i:i + chunk_rows]
+        chunk_num = i // chunk_rows + 1
+        print(f"[MATRIX-legacy] Chunk {chunk_num}/{total_chunks}: "
+              f"rows {i}-{i+len(chunk_origins)-1}, {len(chunk_origins)}×{n_dest}={len(chunk_origins)*n_dest} elements")
+        params = {
+            "origins":        _coords(chunk_origins),
+            "destinations":   _coords(destinations),
+            "mode":           "driving",
+            "key":            API_KEY,
+            "departure_time": str(int(departure_ts)),
+            "traffic_model":  "best_guess",
+        }
+        try:
+            resp = http_requests.get(
+                "https://maps.googleapis.com/maps/api/distancematrix/json",
+                params=params, timeout=15)
+            data = resp.json()
+            if data["status"] != "OK":
+                print(f"[MATRIX-legacy] ✗ chunk {chunk_num} status={data['status']} "
+                      f"msg={data.get('error_message','')} "
+                      f"full={json.dumps(data, ensure_ascii=False)[:500]}")
+                return None, False
+            for row in data["rows"]:
+                cols = []
+                for el in row["elements"]:
+                    if el["status"] == "OK":
+                        if "duration_in_traffic" in el:
+                            secs = el["duration_in_traffic"]["value"]
+                            traffic_count += 1
+                        else:
+                            secs = el["duration"]["value"]
+                            static_count += 1
+                    else:
+                        secs = 999999
+                    cols.append(secs)
+                full_matrix.append(cols)
+        except Exception as e:
+            print(f"[MATRIX-legacy] ✗ chunk {chunk_num} exception: {e}")
+            return None, False
+
+    has_traffic = traffic_count > 0
+    print(f"[MATRIX-legacy] ✓ {len(full_matrix)}×{n_dest} matrix — "
+          f"traffic_cells={traffic_count}, static_cells={static_count}, "
+          f"traffic_aware={has_traffic}")
+    return full_matrix, has_traffic
+
+
+def _distance_matrix_timed(origins, destinations, departure_ts):
+    """
+    统一入口：优先使用 Routes API v2，失败则自动回退到旧版 Distance Matrix API（分块）。
+    返回 (行×列的秒数矩阵, 是否使用了路况数据)，失败返回 (None, False)。
+    """
+    # ── 策略 A: Routes API v2 ──────────────────────────────
+    matrix, has_traffic = _distance_matrix_routes_v2(origins, destinations, departure_ts)
+    if matrix:
+        return matrix, has_traffic
+
+    # ── 策略 B: 旧版 Distance Matrix API（分块）────────────
+    print(f"[MATRIX] Routes API v2 failed, falling back to legacy Distance Matrix API (chunked)…")
+    print(f"[MATRIX] Matrix size: {len(origins)}×{len(destinations)} = {len(origins)*len(destinations)} elements")
+    return _distance_matrix_legacy_chunked(origins, destinations, departure_ts)
 
 
 def _greedy_tsp_from(matrix, start=0):
