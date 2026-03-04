@@ -300,7 +300,7 @@ def _distance_matrix_legacy_chunked(origins, destinations, departure_ts):
             "destinations":   _coords(destinations),
             "mode":           "driving",
             "key":            API_KEY,
-            "departure_time": str(int(departure_ts)),
+            "departure_time": "now",
             "traffic_model":  "best_guess",
         }
         try:
