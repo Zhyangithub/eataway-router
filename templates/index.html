@@ -314,10 +314,12 @@ function toggleDone(driver) {
   if (currentData) renderCards(currentData);
 }
 
-// ── Fix 4: parse UTC ISO timestamp → local time ──
+// ── Fix 1: parse timestamp → local time for all formats
 function formatGeneratedAt(ts) {
   if (!ts) return '—';
-  const d = new Date(ts);
+  // New ISO UTC: "2026-03-04T15:07:00Z" → parse as UTC, display local
+  // Old local:   "2026-03-04 15:07:00"  → replace space with T, no Z = local time
+  const d = ts.includes('T') ? new Date(ts) : new Date(ts.replace(' ', 'T'));
   if (isNaN(d)) return ts;
   return d.toLocaleDateString('sv-SE') + ' ' + d.toLocaleTimeString('sv-SE');
 }
@@ -422,6 +424,11 @@ function buildPhoneGrid(drivers, phones) {
       <input class="phone-input" type="text" id="phone-${d}"
              value="${merged[d]}" placeholder="46701234567">
     </div>`).join('');
+
+  // ★ Fix 3: sync merged phones back into currentData so renderCard sees them
+  if (currentData) {
+    currentData.phones = Object.assign({}, currentData.phones, merged);
+  }
 }
 
 async function savePhones() {
@@ -476,6 +483,7 @@ async function fetchAndRender() {
   currentData = data;
   render(data);
   const elapsed = Date.now() - pollStartedAt;
+  // Stop if: not running AND enough time passed AND (no prev stamp OR stamp changed)
   if (!data.running && elapsed > 3000) {
     clearInterval(polling);
     polling = null;
@@ -488,21 +496,39 @@ function startPolling() {
   if (!polling) polling = setInterval(fetchAndRender, 1500);
 }
 
-// ★ Fix 3: At exactly the scheduled time, start polling (no constant background refresh)
+// ★ Fix 3: Fire 1 minute before scheduled time, poll until generated_at changes
+// This handles timezone offsets between browser and server, and fast backend jobs
 let scheduleTimer = null;
 function armScheduleWatcher(hour, minute) {
   if (scheduleTimer) clearTimeout(scheduleTimer);
   const now = new Date();
   const next = new Date();
-  next.setHours(hour, minute, 10, 0); // 10s after scheduled time, gives backend time to start
+  next.setHours(hour, minute, 0, 0);
   if (next <= now) next.setDate(next.getDate() + 1);
-  const delay = next - now;
+  // Start polling 60s before scheduled time — catches fast backends and tz offsets
+  const fireAt = new Date(next.getTime() - 60 * 1000);
+  const delay = Math.max(0, fireAt - now);
   scheduleTimer = setTimeout(() => {
-    // Only fire if we're not already polling
-    if (!polling) startPolling();
-    // Re-arm for the next day
-    armScheduleWatcher(hour, minute);
+    if (!polling) startScheduledPolling();
+    armScheduleWatcher(hour, minute); // re-arm for next day
   }, delay);
+}
+
+// Poll for up to 6 minutes, stop when generated_at actually changes
+function startScheduledPolling() {
+  const prevAt = currentData?.generated_at;
+  const deadline = Date.now() + 6 * 60 * 1000;
+  pollStartedAt = Date.now();
+  polling = setInterval(async () => {
+    try {
+      const data = await fetch('/api/status?_=' + Date.now()).then(r => r.json());
+      currentData = data;
+      render(data);
+      const done = !data.running && data.generated_at !== prevAt;
+      const timedOut = Date.now() > deadline;
+      if (done || timedOut) { clearInterval(polling); polling = null; }
+    } catch(e) {}
+  }, 2000);
 }
 
 
