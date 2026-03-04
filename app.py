@@ -496,6 +496,7 @@ def get_route_stats(ordered_stores, departure_time=None):
         "departure_time": dep_ts,
         "traffic_model":  "best_guess",
     }
+    print(f"[STATS] Attempt 1: {len(ordered_stores)} waypoints, dep={dep_ts}")
     try:
         resp = http_requests.get(
             "https://maps.googleapis.com/maps/api/directions/json",
@@ -521,6 +522,9 @@ def get_route_stats(ordered_stores, departure_time=None):
                 "distance_km":  round(dist_m / 1000, 1),
                 "traffic_aware": has_traffic,
             }
+        else:
+            print(f"[STATS] ✗ Attempt 1 FAILED: status={data['status']} "
+                  f"msg={data.get('error_message','')} waypoints={len(ordered_stores)}")
     except Exception as e:
         print(f"[STATS] traffic call failed: {e}")
 
@@ -1374,6 +1378,7 @@ def api_reorder(driver_name):
 
     # ── Optimize unlocked portion ──────────────────────────────
     optimization_warning = None
+    optimize_traffic_aware = False
     if unlocked_stores:
         optimized_unlocked, stats_or_err = optimize_route(unlocked_stores)
         if not optimized_unlocked:
@@ -1382,6 +1387,11 @@ def api_reorder(driver_name):
             print(f"[REORDER] optimize_route failed for {driver_name}: {stats_or_err}, using current order")
             optimized_unlocked = unlocked_stores
             optimization_warning = str(stats_or_err)
+        else:
+            # 保留 optimize_route 返回的 traffic_aware 标志
+            if isinstance(stats_or_err, dict):
+                optimize_traffic_aware = stats_or_err.get("traffic_aware", False)
+                print(f"[REORDER] optimize_route traffic_aware={optimize_traffic_aware}")
     else:
         optimized_unlocked = []
 
@@ -1402,7 +1412,13 @@ def api_reorder(driver_name):
     final = [s for s in final if s is not None]
 
     # ── Get accurate stats for the complete merged route ───────
+    print(f"[REORDER] Getting stats for merged route ({len(final)} stores)…")
     stats = get_route_stats(final, departure_time=int(_time.time()))
+    if stats:
+        print(f"[REORDER] get_route_stats returned: traffic_aware={stats.get('traffic_aware')}, "
+              f"dur={stats.get('duration_sec')}s, dist={stats.get('distance_km')}km")
+    else:
+        print(f"[REORDER] get_route_stats returned None!")
 
     urls = generate_urls(final)
 
@@ -1420,11 +1436,15 @@ def api_reorder(driver_name):
         r["duration"]      = f"{hours} h {mins} min" if hours > 0 else f"{mins} min"
         r["duration_sec"]  = dur_sec
         r["distance"]      = f"{stats['distance_km']} km"
-        r["traffic_aware"] = stats.get("traffic_aware", False)
+        # ★ FIX: 如果 optimize_route 返回了 traffic_aware=True，保留它
+        #   即使 get_route_stats 没返回 duration_in_traffic
+        r["traffic_aware"] = stats.get("traffic_aware", False) or optimize_traffic_aware
+        print(f"[REORDER] Final traffic_aware={r['traffic_aware']} "
+              f"(stats={stats.get('traffic_aware')}, optimize={optimize_traffic_aware})")
     elif not r.get("duration"):
         r["duration"] = "—"
         r["distance"] = "—"
-        r["traffic_aware"] = False
+        r["traffic_aware"] = optimize_traffic_aware  # ★ 尝试保留 optimize 的结果
     save_state()
 
     return jsonify({
