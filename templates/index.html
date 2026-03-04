@@ -220,6 +220,15 @@
   .stop-item:last-child { border-bottom: none; }
   .stop-num { color: var(--accent); width: 22px; text-align: right; flex-shrink: 0; font-size: .65rem; }
 
+  .driver-card.status-done   { border-top: 2px solid #a3e635; opacity: .75; }
+  .badge-done { color: #a3e635; border-color: #a3e635; background: rgba(163,230,53,.08); }
+  .btn-klar {
+    font-family: var(--mono); font-size: .65rem; letter-spacing: .15em;
+    padding: 3px 8px; border: 1px solid; text-transform: uppercase;
+    cursor: pointer; background: transparent; transition: all .15s;
+  }
+  .btn-klar:hover { filter: brightness(1.3); transform: scale(1.05); }
+
   .error-msg     { padding: .8rem 1.2rem; font-family: var(--mono); font-size: .72rem; color: var(--err); background: rgba(239,68,68,.05); border-top: 1px solid rgba(239,68,68,.15); }
   .unmatched-row { font-family: var(--mono); font-size: .65rem; color: var(--warn); padding: .3rem 1.2rem; background: rgba(250,204,21,.04); border-top: 1px solid rgba(250,204,21,.15); }
 
@@ -258,8 +267,6 @@
     <span id="next-run"></span>
 
     <button class="btn btn-export" id="btn-export" onclick="exportExcel()" disabled>↓ Exportera Excel</button>
-    <button class="btn btn-wa"     id="btn-wa-all"  onclick="sendAllWA()"    disabled>✉ Skicka alla WhatsApp</button>
-    <button class="btn btn-email"  id="btn-email-all" onclick="sendAllEmail()" disabled>@ Skicka alla Email</button>
   </div>
 
   <!-- Status strip -->
@@ -283,39 +290,6 @@
   </div>
 
 
-  <!-- Email config panel -->
-  <div class="phone-panel" style="border-color:rgba(56,189,248,.2)">
-    <div class="phone-panel-header" onclick="toggleEmailPanel(this)">
-      <span class="phone-panel-title" style="color:var(--blue)">@ E-post konfiguration</span>
-      <span style="font-family:var(--mono);font-size:.7rem;color:var(--muted);">▼ klicka för att konfigurera</span>
-    </div>
-    <div class="phone-panel-body" id="email-panel-body">
-      <!-- SMTP config -->
-      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px 16px;margin-bottom:14px">
-        <div style="font-family:var(--mono);font-size:.7rem;color:var(--blue);margin-bottom:10px;letter-spacing:.1em">SMTP-INSTÄLLNINGAR (Gmail)</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
-          <div class="phone-row">
-            <label class="phone-label">Avsändaradress</label>
-            <input class="phone-input" type="email" id="cfg-sender" placeholder="ditt@gmail.com">
-          </div>
-          <div class="phone-row">
-            <label class="phone-label">App-lösenord (Gmail)</label>
-            <input class="phone-input" type="password" id="cfg-password" placeholder="xxxx xxxx xxxx xxxx">
-          </div>
-        </div>
-        <div style="display:flex;gap:10px;align-items:center">
-          <button class="btn btn-secondary" style="font-size:.8rem;padding:.4rem 1rem" onclick="saveEmailConfig()">💾 Spara SMTP</button>
-          <span id="smtp-saved" style="font-family:var(--mono);font-size:.7rem;color:var(--ok);display:none">✓ Sparat</span>
-          <span style="font-family:var(--mono);font-size:.65rem;color:var(--muted)">Gmail: aktivera 2FA → App-lösenord</span>
-        </div>
-      </div>
-      <!-- Driver emails -->
-      <p class="phone-hint">E-postadresser per chaufför:</p>
-      <div class="phone-grid" id="email-grid"></div>
-      <button class="btn btn-secondary" style="font-size:.8rem;padding:.4rem 1rem" onclick="saveDriverEmails()">💾 Spara adresser</button>
-      <span id="emails-saved" style="font-family:var(--mono);font-size:.7rem;color:var(--ok);margin-left:.8rem;display:none">✓ Sparat</span>
-    </div>
-  </div>
   <!-- Driver cards -->
   <div class="drivers-grid" id="drivers-grid">
     <div class="empty-state">
@@ -328,7 +302,25 @@
 <script>
 let polling = null;
 let currentData = null;
-let pollStartedAt = 0;   // ★ 防止竞态：记录轮询开始时间
+let pollStartedAt = 0;
+let lastGeneratedAt = null;  // ★ Fix 3: detect auto-generated routes
+
+// ── Fix 5: KLAR done-state stored in localStorage ──
+const doneDrivers = new Set(JSON.parse(localStorage.getItem('doneDrivers') || '[]'));
+function toggleDone(driver) {
+  if (doneDrivers.has(driver)) doneDrivers.delete(driver);
+  else doneDrivers.add(driver);
+  localStorage.setItem('doneDrivers', JSON.stringify([...doneDrivers]));
+  if (currentData) renderCards(currentData);
+}
+
+// ── Fix 4: parse UTC ISO timestamp → local time ──
+function formatGeneratedAt(ts) {
+  if (!ts) return '—';
+  const d = new Date(ts);
+  if (isNaN(d)) return ts;
+  return d.toLocaleDateString('sv-SE') + ' ' + d.toLocaleTimeString('sv-SE');
+}
 
 // ── Clock ──
 (function clock() {
@@ -343,7 +335,6 @@ async function triggerGenerate() {
   const btn = document.getElementById('btn-generate');
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span> Kör...';
-  // ★ 先清空旧结果，让用户清楚地看到正在重新计算
   setStatus('running', '⚙ Skickar förfrågan...');
   const res = await fetch('/api/generate', { method: 'POST' });
   const d = await res.json();
@@ -358,18 +349,21 @@ async function triggerGenerate() {
 }
 
 
-// ── Schedule (FIX: persisted in localStorage) ──
+// ── Schedule ──
 function saveSchedule() {
   const val = document.getElementById('schedule-time').value;
   if (!val) return;
-  localStorage.setItem('scheduleTime', val);          // ← FIX: persist locally
+  localStorage.setItem('scheduleTime', val);
   const [hour, minute] = val.split(':').map(Number);
   fetch('/api/schedule', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ hour, minute })
   }).then(r => r.json()).then(d => {
-    if (d.ok) updateNextRun(hour, minute);
+    if (d.ok) {
+      updateNextRun(hour, minute);
+      armScheduleWatcher(hour, minute); // ★ re-arm with new time
+    }
     const el = document.getElementById('schedule-time');
     el.style.outline = '1px solid var(--ok)';
     setTimeout(() => el.style.outline = '', 1000);
@@ -377,18 +371,19 @@ function saveSchedule() {
 }
 
 function loadScheduleTime(serverHour, serverMinute) {
-  // FIX: prefer localStorage value, fall back to server
   const saved = localStorage.getItem('scheduleTime');
   const input = document.getElementById('schedule-time');
   if (saved) {
     input.value = saved;
     const [h, m] = saved.split(':').map(Number);
     updateNextRun(h, m);
+    armScheduleWatcher(h, m);
   } else {
     const hh = String(serverHour).padStart(2,'0');
     const mm = String(serverMinute).padStart(2,'0');
     input.value = `${hh}:${mm}`;
     updateNextRun(serverHour, serverMinute);
+    armScheduleWatcher(serverHour, serverMinute);
   }
 }
 
@@ -409,13 +404,24 @@ function togglePhonePanel(header) {
   document.getElementById('phone-panel-body').classList.toggle('open');
 }
 
+// ★ Fix 6: merge server phones with localStorage backup; don't overwrite if editing
 function buildPhoneGrid(drivers, phones) {
+  // Don't rebuild while user is actively typing in the grid
   const grid = document.getElementById('phone-grid');
+  if (document.activeElement && grid.contains(document.activeElement)) return;
+
+  // Restore from localStorage if server has empty values
+  const localPhones = JSON.parse(localStorage.getItem('driver_phones') || '{}');
+  const merged = {};
+  drivers.forEach(d => {
+    merged[d] = (phones[d] && phones[d] !== '') ? phones[d] : (localPhones[d] || '');
+  });
+
   grid.innerHTML = drivers.map(d => `
     <div class="phone-row">
       <label class="phone-label">${d}</label>
       <input class="phone-input" type="text" id="phone-${d}"
-             value="${phones[d] || ''}" placeholder="46701234567">
+             value="${merged[d]}" placeholder="46701234567">
     </div>`).join('');
 }
 
@@ -430,25 +436,24 @@ async function savePhones() {
     body: JSON.stringify(phones)
   });
   currentData.phones = phones;
+  // ★ Fix 6: also persist to localStorage as backup
+  localStorage.setItem('driver_phones', JSON.stringify(phones));
   const msg = document.getElementById('phones-saved');
   msg.style.display = 'inline';
   setTimeout(() => msg.style.display = 'none', 2000);
 }
 
 
-// ── WhatsApp ──
+// ── WhatsApp (individual only) ──
 function buildWAMessage(driver, r) {
-  const date = currentData?.generated_at || '—';
+  const date = currentData?.generated_at ? formatGeneratedAt(currentData.generated_at) : '—';
   const base = window.location.origin;
   const pageUrl = `${base}/links/${driver}`;
-  // Plain text only — no emoji (causes encoding issues in some WhatsApp clients)
-  return `*Kororder ${driver}* - ${date}\n${r.store_count || r.stores?.length} butiker | ${r.duration || '-'} | ${r.distance || '-'}\n\nOppna din ruttlank har:\n${pageUrl}\n\nHa en bra dag!`;
+  return `*Körorder ${driver}* - ${date}\n${r.store_count || r.stores?.length} butiker | ${r.duration || '-'} | ${r.distance || '-'}\n\nÖppna din ruttlänk här:\n${pageUrl}\n\nHa en bra dag!`;
 }
 
 function cleanPhone(raw) {
-  // Remove spaces, dashes, plus signs
   let p = raw.replace(/[\s\-\+]/g, '');
-  // If starts with 0, replace with Swedish country code 46
   if (p.startsWith('0')) p = '46' + p.slice(1);
   return p;
 }
@@ -458,17 +463,7 @@ function openWA(driver, r) {
   if (!raw) return alert(`Inget telefonnummer för ${driver}. Lägg till i konfigurationen ovan.`);
   const phone = cleanPhone(raw);
   const msg = encodeURIComponent(buildWAMessage(driver, r));
-  // Use api.whatsapp.com/send — works both in browser and opens app if installed
   window.open(`https://api.whatsapp.com/send/?phone=${phone}&text=${msg}&type=phone_number&app_absent=0`, '_blank');
-}
-
-function sendAllWA() {
-  if (!currentData?.results) return;
-  const drivers = currentData.drivers || [];
-  drivers.forEach(d => {
-    const r = currentData.results[d];
-    if (r?.status === 'ok') openWA(d, r);
-  });
 }
 
 
@@ -478,13 +473,9 @@ function exportExcel() { window.location.href = '/api/export'; }
 
 // ── Polling ──
 async function fetchAndRender() {
-  // ★ cache-bust: 防止浏览器缓存旧的 /api/status 响应
   const data = await fetch('/api/status?_=' + Date.now()).then(r => r.json());
   currentData = data;
   render(data);
-  // ★ FIX: 仅在轮询启动 3 秒后才允许停止轮询。
-  //   解决竞态条件：后端线程可能还没来得及设置 running=True，
-  //   导致首次轮询拿到 running=false + 旧结果后立刻停止。
   const elapsed = Date.now() - pollStartedAt;
   if (!data.running && elapsed > 3000) {
     clearInterval(polling);
@@ -495,9 +486,24 @@ async function fetchAndRender() {
 function startPolling() {
   setStatus('running', '⚙ Optimerar rutter via Google Maps API...');
   pollStartedAt = Date.now();
-  // ★ FIX: 不立刻执行 fetchAndRender()，等 1.5s 后再首次轮询，
-  //   给后端线程足够时间设置 running=True 并开始计算。
   if (!polling) polling = setInterval(fetchAndRender, 1500);
+}
+
+// ★ Fix 3: At exactly the scheduled time, start polling (no constant background refresh)
+let scheduleTimer = null;
+function armScheduleWatcher(hour, minute) {
+  if (scheduleTimer) clearTimeout(scheduleTimer);
+  const now = new Date();
+  const next = new Date();
+  next.setHours(hour, minute, 10, 0); // 10s after scheduled time, gives backend time to start
+  if (next <= now) next.setDate(next.getDate() + 1);
+  const delay = next - now;
+  scheduleTimer = setTimeout(() => {
+    // Only fire if we're not already polling
+    if (!polling) startPolling();
+    // Re-arm for the next day
+    armScheduleWatcher(hour, minute);
+  }, delay);
 }
 
 
@@ -507,12 +513,9 @@ function render(data) {
 
   loadScheduleTime(schedule_hour, schedule_minute);
   if (drivers) buildPhoneGrid(drivers, phones || {});
-  if (drivers) buildEmailGrid(drivers, data.emails || {});
 
   const hasResults = Object.keys(results || {}).length > 0;
-  document.getElementById('btn-export').disabled    = !hasResults;
-  document.getElementById('btn-wa-all').disabled    = !hasResults;
-  document.getElementById('btn-email-all').disabled = !hasResults;
+  document.getElementById('btn-export').disabled = !hasResults;
   document.getElementById('btn-generate').disabled = running;
   document.getElementById('btn-generate').innerHTML = running
     ? '<span class="spinner"></span> Kör...' : '▶ Generera Nu';
@@ -526,14 +529,23 @@ function render(data) {
     const trafficNote = totalOk > 0
       ? ` | Trafik: ${trafficCount}/${totalOk} ${trafficCount === 0 ? '⚠ (statisk ETA)' : '✓'}`
       : '';
+    // ★ Fix 4: display generated_at in local timezone
+    const localTime = formatGeneratedAt(generated_at);
     setStatus(errCount ? 'error' : 'ok',
-      errCount ? `⚠ ${errCount} chaufför(er) fick fel — ${generated_at}${trafficNote}`
-               : `✓ Alla rutter klara — ${generated_at}${trafficNote}`);
+      errCount ? `⚠ ${errCount} chaufför(er) fick fel — ${localTime}${trafficNote}`
+               : `✓ Alla rutter klara — ${localTime}${trafficNote}`);
   } else {
     setStatus('idle', 'Inga rutter — klicka Generera Nu för att starta.');
   }
 
+  renderCards(data);
+}
+
+function renderCards(data) {
+  const { results, drivers, running, phones } = data;
+  const hasResults = Object.keys(results || {}).length > 0;
   const grid = document.getElementById('drivers-grid');
+
   if (!hasResults && !running) {
     grid.innerHTML = `<div class="empty-state"><div class="empty-icon">📡</div>
       <div class="empty-text">Väntar på ruttdata</div>
@@ -551,14 +563,16 @@ function render(data) {
 
 function renderCard(driver, r, delay, phone) {
   const isOk = r.status === 'ok';
-  const statusClass = r.status ? `status-${r.status}` : 'status-idle';
-  const badgeClass  = isOk ? 'badge-ok' : (r.status === 'error' ? 'badge-error' : 'badge-idle');
-  const badgeText   = isOk ? 'KLAR' : (r.status === 'error' ? 'FEL' : 'VÄNTAR');
+  // ★ Fix 5: KLAR button checks done state from localStorage
+  const isDone = doneDrivers.has(driver);
+  const statusClass = isDone ? 'status-done' : (r.status ? `status-${r.status}` : 'status-idle');
+  const badgeClass  = isDone ? 'badge-done' : (isOk ? 'badge-ok' : (r.status === 'error' ? 'badge-error' : 'badge-idle'));
+  const badgeText   = isDone ? 'LEVERERAD' : (isOk ? 'KLAR' : (r.status === 'error' ? 'FEL' : 'VÄNTAR'));
   const drvId = 'DRV-' + driver.toUpperCase().slice(0,3) + String(driver.length * 7 % 99).padStart(2,'0');
 
-  const emailBtn = isOk ? `
-    <button class="btn-email-sm ${(currentData?.emails?.[driver] || '') ? '' : 'no-email'}"
-       onclick="sendEmail('${driver}')">@ Email</button>` : '';
+  // ★ Fix 5: KLAR is now a real button that toggles done state
+  const klarBtn = `<button class="status-badge ${badgeClass} btn-klar" onclick="toggleDone('${driver}')" title="${isDone ? 'Klicka för att ångra' : 'Klicka för att markera som levererad'}">${badgeText}</button>`;
+
   const waBtn = isOk ? `
     <a class="btn-wa-sm ${phone ? '' : 'no-phone'}"
        href="#" onclick="event.preventDefault();openWA('${driver}',currentData.results['${driver}'])">
@@ -593,7 +607,6 @@ function renderCard(driver, r, delay, phone) {
 
   const errMsg = !isOk && r.error ? `<div class="error-msg">✗ ${r.error}</div>` : '';
 
-  // FIX: store count shown in toggle button + scroll hint
   const storeCount = r.stores?.length || 0;
   const stops = isOk && storeCount ? `
     <button class="stops-toggle" onclick="toggleStops(this)">
@@ -606,14 +619,16 @@ function renderCard(driver, r, delay, phone) {
         </div>`).join('')}
     </div>` : '';
 
+  const doneOverlay = isDone ? `<div style="position:absolute;inset:0;background:rgba(34,197,94,.04);pointer-events:none;border:1px solid rgba(34,197,94,.3);"></div>` : '';
+
   return `
     <div class="driver-card ${statusClass}" style="animation-delay:${delay}s">
+      ${doneOverlay}
       <div class="card-header">
         <div><div class="driver-name">${driver}</div><div class="driver-id">${drvId}</div></div>
         <div class="card-header-right">
-          ${emailBtn}
           ${waBtn}
-          <span class="status-badge ${badgeClass}">${badgeText}</span>
+          ${klarBtn}
         </div>
       </div>
       ${stats}${links}${unmatched}${errMsg}${stops}
@@ -637,105 +652,13 @@ function setStatus(type, msg) {
   dot.style.animation   = type === 'running' ? 'pulse 1s infinite' : 'none';
 }
 
-
-// ── Email ──
-function toggleEmailPanel(header) {
-  header.classList.toggle('open');
-  document.getElementById('email-panel-body').classList.toggle('open');
-}
-
-function buildEmailGrid(drivers, emails) {
-  const grid = document.getElementById('email-grid');
-  if (!grid) return;
-  grid.innerHTML = drivers.map(d => `
-    <div class="phone-row">
-      <label class="phone-label">${d}</label>
-      <input class="phone-input" type="email" id="email-${d}"
-             value="${emails[d] || ''}" placeholder="chauffor@gmail.com">
-    </div>`).join('');
-}
-
-async function saveEmailConfig() {
-  const sender   = document.getElementById('cfg-sender').value.trim();
-  const password = document.getElementById('cfg-password').value.trim();
-  await fetch('/api/email-config', {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({sender, password})
-  });
-  const el = document.getElementById('smtp-saved');
-  el.style.display = 'inline';
-  setTimeout(() => el.style.display = 'none', 2000);
-}
-
-async function saveDriverEmails() {
-  const emails = {};
-  (currentData?.drivers || []).forEach(d => {
-    emails[d] = document.getElementById(`email-${d}`)?.value.trim() || '';
-  });
-  await fetch('/api/emails', {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify(emails)
-  });
-  currentData.emails = emails;
-  const el = document.getElementById('emails-saved');
-  el.style.display = 'inline';
-  setTimeout(() => el.style.display = 'none', 2000);
-}
-
-async function sendEmail(driver) {
-  const btn = event.target;
-  btn.textContent = '...';
-  btn.style.opacity = '.5';
-  try {
-    const res = await fetch(`/api/send-email/${driver}`, {method:'POST'});
-    const text = await res.text();
-    console.log('Email response:', text);
-    let d;
-    try { d = JSON.parse(text); }
-    catch(e) { throw new Error('Server error (500):\n' + text.slice(0, 300)); }
-    btn.textContent = d.ok ? '✓ Skickat' : '✗ Fel';
-    btn.style.color = d.ok ? 'var(--ok)' : 'var(--err)';
-    if (!d.ok) alert('Email-fel:\n' + (d.msg || 'Okänt fel'));
-  } catch(e) {
-    btn.textContent = '✗ Fel';
-    btn.style.color = 'var(--err)';
-    alert('Email-fel:\n' + e.message);
-  }
-  setTimeout(() => {
-    btn.textContent = '@ Email';
-    btn.style.color = ''; btn.style.opacity = '';
-  }, 4000);
-}
-
-async function sendAllEmail() {
-  const btn = document.getElementById('btn-email-all');
-  btn.disabled = true;
-  btn.textContent = '@ Skickar...';
-  const res = await fetch('/api/send-email-all', {method:'POST'});
-  const data = await res.json();
-  const errs = Object.entries(data).filter(([,v]) => !v.ok);
-  btn.textContent = errs.length ? `@ ${errs.length} fel` : '@ Alla skickade!';
-  btn.style.color = errs.length ? 'var(--err)' : 'var(--ok)';
-  setTimeout(() => {
-    btn.textContent = '@ Skicka alla Email';
-    btn.style.color = ''; btn.disabled = false;
-  }, 4000);
-}
-
 // ── Init ──
 (async () => {
-  // ★ cache-bust 防止浏览器缓存初始状态
   const data = await fetch('/api/status?_=' + Date.now()).then(r => r.json());
   currentData = data;
+  lastGeneratedAt = data.generated_at;
   render(data);
   if (data.running) startPolling();
-  // Load SMTP sender (not password)
-  try {
-    const cfg = await fetch('/api/email-config').then(r => r.json());
-    if (cfg.sender) document.getElementById('cfg-sender').value = cfg.sender;
-  } catch(e) {}
 })();
 </script>
 </body>

@@ -25,14 +25,123 @@
         "Coop Bagarmossen",
         "Coop Björkhagen"
       ],
+      "store_objects": [
+        {
+          "name": "Tempo Nacka",
+          "lat": "59.3078526",
+          "lng": "18.1380715"
+        },
+        {
+          "name": "Coop Matboden",
+          "lat": "59.3114499",
+          "lng": "18.2007338"
+        },
+        {
+          "name": "Direkten Nacka strand",
+          "lat": "59.31653497127535",
+          "lng": "18.160415798346445"
+        },
+        {
+          "name": "Coop Bondegatan",
+          "lat": "59.3135148",
+          "lng": "18.0928117"
+        },
+        {
+          "name": "Coop Hammarby Sjöstad",
+          "lat": "59.3025381",
+          "lng": "18.1027484"
+        },
+        {
+          "name": "Coop Sockenplan",
+          "lat": "59.28293797886226",
+          "lng": "18.073051599682206"
+        },
+        {
+          "name": "MyWay Gubbängen",
+          "lat": "59.2640081",
+          "lng": "18.082121"
+        },
+        {
+          "name": "Coop Gubbängen",
+          "lat": "59.2623173",
+          "lng": "18.0829918"
+        },
+        {
+          "name": "Ica Högdalen",
+          "lat": "59.263352825493776",
+          "lng": "18.043064052309088"
+        },
+        {
+          "name": "Coop Högdalen",
+          "lat": "59.263838",
+          "lng": "18.0404146"
+        },
+        {
+          "name": "Ica Supermarket Hagsätra",
+          "lat": "59.2622826",
+          "lng": "18.0136771"
+        },
+        {
+          "name": "Coop Stuvsta",
+          "lat": "59.25080781281203",
+          "lng": "18.01060002717933"
+        },
+        {
+          "name": "Ica Nära Stuvsta",
+          "lat": "59.25208535015867",
+          "lng": "17.998276867653416"
+        },
+        {
+          "name": "Mr Rabb",
+          "lat": "59.23530206975631",
+          "lng": "17.982046256014865"
+        },
+        {
+          "name": "Coop Huddinge",
+          "lat": "59.236406881230195",
+          "lng": "17.98077985601488"
+        },
+        {
+          "name": "ICA Huddinge",
+          "lat": "59.24093550256938",
+          "lng": "17.99541425601519"
+        },
+        {
+          "name": "Coop farsta strand",
+          "lat": "59.23520725799116",
+          "lng": "18.102172113687345"
+        },
+        {
+          "name": "Coop farsta centrum",
+          "lat": "59.243069182074265",
+          "lng": "18.09139216950652"
+        },
+        {
+          "name": "Coop Skarpnäck",
+          "lat": "59.2662624",
+          "lng": "18.1355037"
+        },
+        {
+          "name": "Coop Bagarmossen",
+          "lat": "59.2765118",
+          "lng": "18.1326097"
+        },
+        {
+          "name": "Coop Björkhagen",
+          "lat": "59.2902506",
+          "lng": "18.1167029"
+        }
+      ],
       "store_count": 21,
       "urls": [
-        "https://www.google.com/maps/dir/?api=1&origin=59.8542194,17.6650221&destination=59.263838,18.0404146&waypoints=59.3078526%2C18.1380715%7C59.3114499%2C18.2007338%7C59.31653497127535%2C18.160415798346445%7C59.3135148%2C18.0928117%7C59.3025381%2C18.1027484%7C59.28293797886226%2C18.073051599682206%7C59.2640081%2C18.082121%7C59.2623173%2C18.0829918%7C59.263352825493776%2C18.043064052309088",
-        "https://www.google.com/maps/dir/?api=1&origin=59.263838,18.0404146&destination=59.2765118,18.1326097&waypoints=59.2622826%2C18.0136771%7C59.25080781281203%2C18.01060002717933%7C59.25208535015867%2C17.998276867653416%7C59.23530206975631%2C17.982046256014865%7C59.236406881230195%2C17.98077985601488%7C59.24093550256938%2C17.99541425601519%7C59.23520725799116%2C18.102172113687345%7C59.243069182074265%2C18.09139216950652%7C59.2662624%2C18.1355037",
-        "https://www.google.com/maps/dir/?api=1&origin=59.2765118,18.1326097&destination=59.8542194,17.6650221&waypoints=59.2902506%2C18.1167029"
+        "https://www.google.com/maps/dir/?api=1&origin=59.8542194%2C17.6650221&destination=Coop%20H%C3%B6gdalen&waypoints=Tempo%20Nacka%7CCoop%20Matboden%7CDirekten%20Nacka%20strand%7CCoop%20Bondegatan%7CCoop%20Hammarby%20Sj%C3%B6stad%7CCoop%20Sockenplan%7CMyWay%20Gubb%C3%A4ngen%7CCoop%20Gubb%C3%A4ngen%7CIca%20H%C3%B6gdalen",
+        "https://www.google.com/maps/dir/?api=1&origin=Coop%20H%C3%B6gdalen&destination=Coop%20Bagarmossen&waypoints=Ica%20Supermarket%20Hags%C3%A4tra%7CCoop%20Stuvsta%7CIca%20N%C3%A4ra%20Stuvsta%7CMr%20Rabb%7CCoop%20Huddinge%7CICA%20Huddinge%7CCoop%20farsta%20strand%7CCoop%20farsta%20centrum%7CCoop%20Skarpn%C3%A4ck",
+        "https://www.google.com/maps/dir/?api=1&origin=Coop%20Bagarmossen&destination=59.8542194%2C17.6650221&waypoints=Coop%20Bj%C3%B6rkhagen"
       ],
-      "duration": "269 min",
+      "duration": "4 h 28 min",
+      "duration_sec": 16137,
       "distance": "219.4 km",
+      "traffic_aware": false,
       "unmatched": [],
       "unmatched_count": 0
     },
@@ -59,13 +168,112 @@
         "Ica Essingen",
         "Coop Kristineberg"
       ],
+      "store_objects": [
+        {
+          "name": "Coop SVANDAMMSPLAN",
+          "lat": "59.30129125880926",
+          "lng": "18.00451807826129"
+        },
+        {
+          "name": "X-tra Aspudden",
+          "lat": "59.30547760776281",
+          "lng": "17.993389786708168"
+        },
+        {
+          "name": "Coop Mälarhöjden",
+          "lat": "59.3013363",
+          "lng": "17.9573086"
+        },
+        {
+          "name": "Coop Västertorp",
+          "lat": "59.29279728471902",
+          "lng": "17.967702598345248"
+        },
+        {
+          "name": "Fresha segeltorp",
+          "lat": "59.27166881660488",
+          "lng": "17.953728925326814"
+        },
+        {
+          "name": "Vivo ellbe",
+          "lat": "59.21109762779813",
+          "lng": "17.63131069834122"
+        },
+        {
+          "name": "Coop Folkparken",
+          "lat": "59.194077434617164",
+          "lng": "17.64283523696071"
+        },
+        {
+          "name": "Coop Södertälje",
+          "lat": "59.18756199592625",
+          "lng": "17.574132798340035"
+        },
+        {
+          "name": "Coop rönninge",
+          "lat": "59.19399559349224",
+          "lng": "17.74740018299544"
+        },
+        {
+          "name": "ICA Supermarket solbo",
+          "lat": "59.18981308941077",
+          "lng": "17.822003425322723"
+        },
+        {
+          "name": "Ica Maxi Botkyrka",
+          "lat": "59.2373955",
+          "lng": "17.8321908"
+        },
+        {
+          "name": "Supergrossen Hallunda",
+          "lat": "59.244544982209895",
+          "lng": "17.828214213687758"
+        },
+        {
+          "name": "ICA nära Vårby gård",
+          "lat": "59.26411737422678",
+          "lng": "17.88434833696418"
+        },
+        {
+          "name": "Prisma Skärholmen",
+          "lat": "59.27686418115569",
+          "lng": "17.9049156523097"
+        },
+        {
+          "name": "Coop Älvsjötorg",
+          "lat": "59.27930852587509",
+          "lng": "18.00960081368949"
+        },
+        {
+          "name": "Coop Storsjövägen",
+          "lat": "59.2993312",
+          "lng": "18.0426395"
+        },
+        {
+          "name": "ICA Nära Årsta",
+          "lat": "59.2977933",
+          "lng": "18.0632859"
+        },
+        {
+          "name": "Ica Essingen",
+          "lat": "59.324743",
+          "lng": "18.0076742"
+        },
+        {
+          "name": "Coop Kristineberg",
+          "lat": "59.33324046333594",
+          "lng": "18.002095440674807"
+        }
+      ],
       "store_count": 19,
       "urls": [
-        "https://www.google.com/maps/dir/?api=1&origin=59.8542194,17.6650221&destination=59.18981308941077,17.822003425322723&waypoints=59.30129125880926%2C18.00451807826129%7C59.30547760776281%2C17.993389786708168%7C59.3013363%2C17.9573086%7C59.29279728471902%2C17.967702598345248%7C59.27166881660488%2C17.953728925326814%7C59.21109762779813%2C17.63131069834122%7C59.194077434617164%2C17.64283523696071%7C59.18756199592625%2C17.574132798340035%7C59.19399559349224%2C17.74740018299544",
-        "https://www.google.com/maps/dir/?api=1&origin=59.18981308941077,17.822003425322723&destination=59.8542194,17.6650221&waypoints=59.2373955%2C17.8321908%7C59.244544982209895%2C17.828214213687758%7C59.26411737422678%2C17.88434833696418%7C59.27686418115569%2C17.9049156523097%7C59.27930852587509%2C18.00960081368949%7C59.2993312%2C18.0426395%7C59.2977933%2C18.0632859%7C59.324743%2C18.0076742%7C59.33324046333594%2C18.002095440674807"
+        "https://www.google.com/maps/dir/?api=1&origin=59.8542194%2C17.6650221&destination=ICA%20Supermarket%20solbo&waypoints=Coop%20SVANDAMMSPLAN%7CX-tra%20Aspudden%7CCoop%20M%C3%A4larh%C3%B6jden%7CCoop%20V%C3%A4stertorp%7CFresha%20segeltorp%7CVivo%20ellbe%7CCoop%20Folkparken%7CCoop%20S%C3%B6dert%C3%A4lje%7CCoop%20r%C3%B6nninge",
+        "https://www.google.com/maps/dir/?api=1&origin=ICA%20Supermarket%20solbo&destination=59.8542194%2C17.6650221&waypoints=Ica%20Maxi%20Botkyrka%7CSupergrossen%20Hallunda%7CICA%20n%C3%A4ra%20V%C3%A5rby%20g%C3%A5rd%7CPrisma%20Sk%C3%A4rholmen%7CCoop%20%C3%84lvsj%C3%B6torg%7CCoop%20Storsj%C3%B6v%C3%A4gen%7CICA%20N%C3%A4ra%20%C3%85rsta%7CIca%20Essingen%7CCoop%20Kristineberg"
       ],
-      "duration": "273 min",
+      "duration": "4 h 33 min",
+      "duration_sec": 16382,
       "distance": "256.5 km",
+      "traffic_aware": false,
       "unmatched": [],
       "unmatched_count": 0
     },
@@ -91,13 +299,107 @@
         "Coop Kungsängen",
         "Coop Tibble"
       ],
+      "store_objects": [
+        {
+          "name": "Coop Sundbypark",
+          "lat": "59.3789387",
+          "lng": "17.9650386"
+        },
+        {
+          "name": "Coop Bromsten",
+          "lat": "59.3793678",
+          "lng": "17.9140886"
+        },
+        {
+          "name": "Stora Coop Spånga",
+          "lat": "59.37874145287527",
+          "lng": "17.9066983094711"
+        },
+        {
+          "name": "Coop Spånga Torg",
+          "lat": "59.381753015909396",
+          "lng": "17.89736407270458"
+        },
+        {
+          "name": "Ica Supermarket Spånga",
+          "lat": "59.3821138",
+          "lng": "17.8977885"
+        },
+        {
+          "name": "Coop Spångavägen",
+          "lat": "59.3679316",
+          "lng": "17.900451"
+        },
+        {
+          "name": "Ica Bromma",
+          "lat": "59.356474",
+          "lng": "17.9114199"
+        },
+        {
+          "name": "Coop Bromma",
+          "lat": "59.35681311307841",
+          "lng": "17.952855419320024"
+        },
+        {
+          "name": "Coop Mineberg",
+          "lat": "59.33943949679218",
+          "lng": "17.989471756019988"
+        },
+        {
+          "name": "Coop Traneberg",
+          "lat": "59.33543023658645",
+          "lng": "17.96963900020099"
+        },
+        {
+          "name": "Coop Brommaplan",
+          "lat": "59.338776943133254",
+          "lng": "17.93944114067507"
+        },
+        {
+          "name": "Hemköp blackeberg",
+          "lat": "59.347573603483674",
+          "lng": "17.884317167658132"
+        },
+        {
+          "name": "Coop Björnboda",
+          "lat": "59.379238394106814",
+          "lng": "17.848325081151085"
+        },
+        {
+          "name": "ICA Nära Söderhöjden",
+          "lat": "59.41663",
+          "lng": "17.84027"
+        },
+        {
+          "name": "Coop Veckovägen",
+          "lat": "59.42399268387215",
+          "lng": "17.823467475076352"
+        },
+        {
+          "name": "Stora Coop Barkarby",
+          "lat": "59.4431024",
+          "lng": "17.8336732"
+        },
+        {
+          "name": "Coop Kungsängen",
+          "lat": "59.49594746323389",
+          "lng": "17.742885518411274"
+        },
+        {
+          "name": "Coop Tibble",
+          "lat": "59.4854105",
+          "lng": "17.7340642"
+        }
+      ],
       "store_count": 18,
       "urls": [
-        "https://www.google.com/maps/dir/?api=1&origin=59.8542194,17.6650221&destination=59.33543023658645,17.96963900020099&waypoints=59.3789387%2C17.9650386%7C59.3793678%2C17.9140886%7C59.37874145287527%2C17.9066983094711%7C59.381753015909396%2C17.89736407270458%7C59.3821138%2C17.8977885%7C59.3679316%2C17.900451%7C59.356474%2C17.9114199%7C59.35681311307841%2C17.952855419320024%7C59.33943949679218%2C17.989471756019988",
-        "https://www.google.com/maps/dir/?api=1&origin=59.33543023658645,17.96963900020099&destination=59.8542194,17.6650221&waypoints=59.338776943133254%2C17.93944114067507%7C59.347573603483674%2C17.884317167658132%7C59.379238394106814%2C17.848325081151085%7C59.41663%2C17.84027%7C59.42399268387215%2C17.823467475076352%7C59.4431024%2C17.8336732%7C59.49594746323389%2C17.742885518411274%7C59.4854105%2C17.7340642"
+        "https://www.google.com/maps/dir/?api=1&origin=59.8542194%2C17.6650221&destination=Coop%20Traneberg&waypoints=Coop%20Sundbypark%7CCoop%20Bromsten%7CStora%20Coop%20Sp%C3%A5nga%7CCoop%20Sp%C3%A5nga%20Torg%7CIca%20Supermarket%20Sp%C3%A5nga%7CCoop%20Sp%C3%A5ngav%C3%A4gen%7CIca%20Bromma%7CCoop%20Bromma%7CCoop%20Mineberg",
+        "https://www.google.com/maps/dir/?api=1&origin=Coop%20Traneberg&destination=59.8542194%2C17.6650221&waypoints=Coop%20Brommaplan%7CHemk%C3%B6p%20blackeberg%7CCoop%20Bj%C3%B6rnboda%7CICA%20N%C3%A4ra%20S%C3%B6derh%C3%B6jden%7CCoop%20Veckov%C3%A4gen%7CStora%20Coop%20Barkarby%7CCoop%20Kungs%C3%A4ngen%7CCoop%20Tibble"
       ],
-      "duration": "206 min",
+      "duration": "3 h 25 min",
+      "duration_sec": 12351,
       "distance": "186.2 km",
+      "traffic_aware": false,
       "unmatched": [],
       "unmatched_count": 0
     },
@@ -124,13 +426,112 @@
         "Daniel tobak affären (enbart tisdagar)",
         "ICA kvantum Sollentuna"
       ],
+      "store_objects": [
+        {
+          "name": "ICA Nära Lindholmen",
+          "lat": "59.58941473041212",
+          "lng": "18.107150456032514"
+        },
+        {
+          "name": "Ica Dragonen",
+          "lat": "59.46595038260956",
+          "lng": "18.04475837507842"
+        },
+        {
+          "name": "Ica Gribbylund",
+          "lat": "59.46228607467894",
+          "lng": "18.09000615365646"
+        },
+        {
+          "name": "ICA kvantum Danderyd",
+          "lat": "59.39850189969559",
+          "lng": "18.03673779783439"
+        },
+        {
+          "name": "Ica Myran",
+          "lat": "59.3971141",
+          "lng": "18.0442327"
+        },
+        {
+          "name": "Myway Danderyd",
+          "lat": "59.3914001",
+          "lng": "18.0432956"
+        },
+        {
+          "name": "Coop Bergshamra",
+          "lat": "59.3812296",
+          "lng": "18.0354135"
+        },
+        {
+          "name": "Tempo Bageby",
+          "lat": "59.3547330",
+          "lng": "18.1331064"
+        },
+        {
+          "name": "Ica Kvantum Lidingö",
+          "lat": "59.3496136",
+          "lng": "18.1461765"
+        },
+        {
+          "name": "Coop Skeppet",
+          "lat": "59.3662224",
+          "lng": "18.1350569"
+        },
+        {
+          "name": "Ica Gärdet Rökubbsgatan",
+          "lat": "59.3451741",
+          "lng": "18.1105641"
+        },
+        {
+          "name": "Ica Nära Gärdet",
+          "lat": "59.3466171",
+          "lng": "18.0999424"
+        },
+        {
+          "name": "Coop Garnisonen",
+          "lat": "59.3359164",
+          "lng": "18.0973855"
+        },
+        {
+          "name": "Coop Storgatan",
+          "lat": "59.3346973",
+          "lng": "18.08601"
+        },
+        {
+          "name": "Coop Erik Dahlbersgatan",
+          "lat": "59.34239087672087",
+          "lng": "18.091298657873768"
+        },
+        {
+          "name": "The Coffice KTH",
+          "lat": "59.35072850078383",
+          "lng": "18.068330300179856"
+        },
+        {
+          "name": "Franzéns Livs",
+          "lat": "59.3503027",
+          "lng": "18.0646492"
+        },
+        {
+          "name": "Daniel tobak affären (enbart tisdagar)",
+          "lat": "59.34405604261072",
+          "lng": "18.054624827152903"
+        },
+        {
+          "name": "ICA kvantum Sollentuna",
+          "lat": "59.42743822799574",
+          "lng": "17.950871456024473"
+        }
+      ],
       "store_count": 19,
       "urls": [
-        "https://www.google.com/maps/dir/?api=1&origin=59.8542194,17.6650221&destination=59.3662224,18.1350569&waypoints=59.58941473041212%2C18.107150456032514%7C59.46595038260956%2C18.04475837507842%7C59.46228607467894%2C18.09000615365646%7C59.39850189969559%2C18.03673779783439%7C59.3971141%2C18.0442327%7C59.3914001%2C18.0432956%7C59.3812296%2C18.0354135%7C59.3547330%2C18.1331064%7C59.3496136%2C18.1461765",
-        "https://www.google.com/maps/dir/?api=1&origin=59.3662224,18.1350569&destination=59.8542194,17.6650221&waypoints=59.3451741%2C18.1105641%7C59.3466171%2C18.0999424%7C59.3359164%2C18.0973855%7C59.3346973%2C18.08601%7C59.34239087672087%2C18.091298657873768%7C59.35072850078383%2C18.068330300179856%7C59.3503027%2C18.0646492%7C59.34405604261072%2C18.054624827152903%7C59.42743822799574%2C17.950871456024473"
+        "https://www.google.com/maps/dir/?api=1&origin=59.8542194%2C17.6650221&destination=Coop%20Skeppet&waypoints=ICA%20N%C3%A4ra%20Lindholmen%7CIca%20Dragonen%7CIca%20Gribbylund%7CICA%20kvantum%20Danderyd%7CIca%20Myran%7CMyway%20Danderyd%7CCoop%20Bergshamra%7CTempo%20Bageby%7CIca%20Kvantum%20Liding%C3%B6",
+        "https://www.google.com/maps/dir/?api=1&origin=Coop%20Skeppet&destination=59.8542194%2C17.6650221&waypoints=Ica%20G%C3%A4rdet%20R%C3%B6kubbsgatan%7CIca%20N%C3%A4ra%20G%C3%A4rdet%7CCoop%20Garnisonen%7CCoop%20Storgatan%7CCoop%20Erik%20Dahlbersgatan%7CThe%20Coffice%20KTH%7CFranz%C3%A9ns%20Livs%7CDaniel%20tobak%20aff%C3%A4ren%20%28enbart%20tisdagar%29%7CICA%20kvantum%20Sollentuna"
       ],
-      "duration": "220 min",
+      "duration": "3 h 40 min",
+      "duration_sec": 13217,
       "distance": "183.0 km",
+      "traffic_aware": false,
       "unmatched": [],
       "unmatched_count": 0
     },
@@ -160,19 +561,133 @@
         "Coop Korpkulla",
         "Ica Glädjen"
       ],
+      "store_objects": [
+        {
+          "name": "Ica Sätuna",
+          "lat": "59.62790334184806",
+          "lng": "17.859809640689576"
+        },
+        {
+          "name": "Coop Märsta",
+          "lat": "59.616359",
+          "lng": "17.856179"
+        },
+        {
+          "name": "Coop Rotebro (Ef)",
+          "lat": "59.4714676",
+          "lng": "17.9161423"
+        },
+        {
+          "name": "Ica Norrviken",
+          "lat": "59.4531047",
+          "lng": "17.9209633"
+        },
+        {
+          "name": "Ica Maxi Häggvik",
+          "lat": "59.4377236",
+          "lng": "17.9323751"
+        },
+        {
+          "name": "Coop Häggvik",
+          "lat": "59.440994616418166",
+          "lng": "17.933881686714948"
+        },
+        {
+          "name": "Ica Supermarket Husby",
+          "lat": "59.4101367",
+          "lng": "17.9256745"
+        },
+        {
+          "name": "Ica Kista Galleria",
+          "lat": "59.4024341",
+          "lng": "17.9464824"
+        },
+        {
+          "name": "Hemköp Ulriksdal",
+          "lat": "59.3808705",
+          "lng": "17.9992312"
+        },
+        {
+          "name": "Quickstar Solna",
+          "lat": "59.3703416",
+          "lng": "17.9994567"
+        },
+        {
+          "name": "Hemköp Scandinavia",
+          "lat": "59.369771433296975",
+          "lng": "18.005007256021532"
+        },
+        {
+          "name": "Ica Supermarket Solna Centrum",
+          "lat": "59.3601951",
+          "lng": "18.0005364"
+        },
+        {
+          "name": "Ica Rapid",
+          "lat": "59.3535789",
+          "lng": "17.9976934"
+        },
+        {
+          "name": "Direkten Hornsbergsstrand",
+          "lat": "59.34055564989282",
+          "lng": "18.00820782533029"
+        },
+        {
+          "name": "Ica Dalastan",
+          "lat": "59.3439504",
+          "lng": "18.0430009"
+        },
+        {
+          "name": "Coop Norrtull",
+          "lat": "59.3466238",
+          "lng": "18.0469786"
+        },
+        {
+          "name": "Ica Nära Roslagstul",
+          "lat": "59.3493508",
+          "lng": "18.0593743"
+        },
+        {
+          "name": "Ica Supermarket Lunden",
+          "lat": "59.4105528",
+          "lng": "17.9635267"
+        },
+        {
+          "name": "Coop Bredden",
+          "lat": "59.4969562",
+          "lng": "17.9261073"
+        },
+        {
+          "name": "Ica Nära Sigma",
+          "lat": "59.5256014",
+          "lng": "17.9146423"
+        },
+        {
+          "name": "Coop Korpkulla",
+          "lat": "59.5218658",
+          "lng": "17.9021527"
+        },
+        {
+          "name": "Ica Glädjen",
+          "lat": "59.5136621",
+          "lng": "17.9290974"
+        }
+      ],
       "store_count": 22,
       "urls": [
-        "https://www.google.com/maps/dir/?api=1&origin=59.8542194,17.6650221&destination=59.3703416,17.9994567&waypoints=59.62790334184806%2C17.859809640689576%7C59.616359%2C17.856179%7C59.4714676%2C17.9161423%7C59.4531047%2C17.9209633%7C59.4377236%2C17.9323751%7C59.440994616418166%2C17.933881686714948%7C59.4101367%2C17.9256745%7C59.4024341%2C17.9464824%7C59.3808705%2C17.9992312",
-        "https://www.google.com/maps/dir/?api=1&origin=59.3703416,17.9994567&destination=59.5256014,17.9146423&waypoints=59.369771433296975%2C18.005007256021532%7C59.3601951%2C18.0005364%7C59.3535789%2C17.9976934%7C59.34055564989282%2C18.00820782533029%7C59.3439504%2C18.0430009%7C59.3466238%2C18.0469786%7C59.3493508%2C18.0593743%7C59.4105528%2C17.9635267%7C59.4969562%2C17.9261073",
-        "https://www.google.com/maps/dir/?api=1&origin=59.5256014,17.9146423&destination=59.8542194,17.6650221&waypoints=59.5218658%2C17.9021527%7C59.5136621%2C17.9290974"
+        "https://www.google.com/maps/dir/?api=1&origin=59.8542194%2C17.6650221&destination=Quickstar%20Solna&waypoints=Ica%20S%C3%A4tuna%7CCoop%20M%C3%A4rsta%7CCoop%20Rotebro%20%28Ef%29%7CIca%20Norrviken%7CIca%20Maxi%20H%C3%A4ggvik%7CCoop%20H%C3%A4ggvik%7CIca%20Supermarket%20Husby%7CIca%20Kista%20Galleria%7CHemk%C3%B6p%20Ulriksdal",
+        "https://www.google.com/maps/dir/?api=1&origin=Quickstar%20Solna&destination=Ica%20N%C3%A4ra%20Sigma&waypoints=Hemk%C3%B6p%20Scandinavia%7CIca%20Supermarket%20Solna%20Centrum%7CIca%20Rapid%7CDirekten%20Hornsbergsstrand%7CIca%20Dalastan%7CCoop%20Norrtull%7CIca%20N%C3%A4ra%20Roslagstul%7CIca%20Supermarket%20Lunden%7CCoop%20Bredden",
+        "https://www.google.com/maps/dir/?api=1&origin=Ica%20N%C3%A4ra%20Sigma&destination=59.8542194%2C17.6650221&waypoints=Coop%20Korpkulla%7CIca%20Gl%C3%A4djen"
       ],
-      "duration": "205 min",
+      "duration": "3 h 24 min",
+      "duration_sec": 12272,
       "distance": "165.2 km",
+      "traffic_aware": false,
       "unmatched": [],
       "unmatched_count": 0
     }
   },
-  "generated_at": "2026-02-26 11:35:14",
+  "generated_at": "2026-03-03 13:14:36",
   "schedule_hour": 11,
   "schedule_minute": 35
 }

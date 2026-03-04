@@ -506,7 +506,7 @@ def do_generate():
         state["running"] = True
     try:
         state["results"]      = run_all_drivers()
-        state["generated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        state["generated_at"] = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
         save_state()
     finally:
         state["running"] = False
