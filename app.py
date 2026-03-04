@@ -515,8 +515,13 @@ def do_generate():
 def reschedule(hour, minute):
     if scheduler.get_job("daily_gen"):
         scheduler.remove_job("daily_gen")
-    scheduler.add_job(do_generate, CronTrigger(hour=hour, minute=minute),
+    # ★ 必须指定时区，否则 CronTrigger 使用服务器默认时区（常为 UTC）
+    #   导致用户设置 16:26 本地时间，实际在 UTC 16:26 才触发
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo("Europe/Stockholm")
+    scheduler.add_job(do_generate, CronTrigger(hour=hour, minute=minute, timezone=tz),
                       id="daily_gen", replace_existing=True)
+    print(f"[SCHEDULE] Armed daily job at {hour:02d}:{minute:02d} Europe/Stockholm")
 
 
 # ── Flask 路由 ───────────────────────────────────────────────

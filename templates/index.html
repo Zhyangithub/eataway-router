@@ -364,6 +364,7 @@ function saveSchedule() {
   }).then(r => r.json()).then(d => {
     if (d.ok) {
       updateNextRun(hour, minute);
+      startCountdownRefresh(hour, minute);
       armScheduleWatcher(hour, minute); // ★ re-arm with new time
     }
     const el = document.getElementById('schedule-time');
@@ -380,11 +381,13 @@ function loadScheduleTime(serverHour, serverMinute) {
     input.value = saved;
     const [h, m] = saved.split(':').map(Number);
     updateNextRun(h, m);
+    startCountdownRefresh(h, m);
   } else {
     const hh = String(serverHour).padStart(2,'0');
     const mm = String(serverMinute).padStart(2,'0');
     input.value = `${hh}:${mm}`;
     updateNextRun(serverHour, serverMinute);
+    startCountdownRefresh(serverHour, serverMinute);
   }
 }
 
@@ -396,6 +399,13 @@ function updateNextRun(hour, minute) {
   const hrs = Math.floor(diff / 60), mins = diff % 60;
   document.getElementById('next-run').textContent =
     `Nästa: ${String(hour).padStart(2,'0')}:${String(minute).padStart(2,'0')} (om ${hrs}h ${mins}m)`;
+}
+
+// ★ 每 30 秒刷新一次倒计时，让 "om Xh Ym" 保持准确
+let _countdownInterval = null;
+function startCountdownRefresh(hour, minute) {
+  if (_countdownInterval) clearInterval(_countdownInterval);
+  _countdownInterval = setInterval(() => updateNextRun(hour, minute), 30000);
 }
 
 
