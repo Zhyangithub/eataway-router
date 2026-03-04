@@ -371,19 +371,18 @@ function saveSchedule() {
 }
 
 function loadScheduleTime(serverHour, serverMinute) {
+  // Only updates the display — never touches the schedule watcher timer
   const saved = localStorage.getItem('scheduleTime');
   const input = document.getElementById('schedule-time');
   if (saved) {
     input.value = saved;
     const [h, m] = saved.split(':').map(Number);
     updateNextRun(h, m);
-    armScheduleWatcher(h, m);
   } else {
     const hh = String(serverHour).padStart(2,'0');
     const mm = String(serverMinute).padStart(2,'0');
     input.value = `${hh}:${mm}`;
     updateNextRun(serverHour, serverMinute);
-    armScheduleWatcher(serverHour, serverMinute);
   }
 }
 
@@ -659,6 +658,17 @@ function setStatus(type, msg) {
   lastGeneratedAt = data.generated_at;
   render(data);
   if (data.running) startPolling();
+
+  // ★ Arm the schedule watcher exactly once — use localStorage if saved, else server value
+  const saved = localStorage.getItem('scheduleTime');
+  let watchHour, watchMinute;
+  if (saved) {
+    [watchHour, watchMinute] = saved.split(':').map(Number);
+  } else {
+    watchHour   = data.schedule_hour;
+    watchMinute = data.schedule_minute;
+  }
+  armScheduleWatcher(watchHour, watchMinute);
 })();
 </script>
 </body>
