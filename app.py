@@ -463,22 +463,33 @@ def _ortools_tsp(matrix, start=0, locked_positions=None):
         if locked_positions:
             manager, routing = _build_base_model()
 
-            # 添加 visit_order 维度：depot 累计值 = 0，每站 +1
-            routing.AddConstantDimension(
-                1,       # 每段弧 +1
-                n + 1,   # 累计上限
-                True,    # depot 从 0 开始
+            # 用显式 transit callback 注册"步数"维度（比 AddConstantDimension 更可靠）
+            def unit_transit(from_index, to_index):
+                return 1
+
+            unit_transit_id = routing.RegisterTransitCallback(unit_transit)
+            dim_ok = routing.AddDimension(
+                unit_transit_id,
+                0,       # slack_max = 0（无松弛）
+                n + 1,   # capacity（累计上限）
+                True,    # fix_start_cumul_to_zero（depot 从 0 开始）
                 "visit_order",
             )
-            order_dim = routing.GetDimensionOrDie("visit_order")
-            solver    = routing.solver()
 
-            for step, node in locked_positions.items():
-                routing_idx = manager.NodeToIndex(node)
-                solver.Add(order_dim.CumulVar(routing_idx) == int(step))
+            if not dim_ok:
+                print("[OR-TOOLS] ✗ AddDimension('visit_order') 失败，跳过锁定约束")
+            else:
+                order_dim = routing.GetDimensionOrDie("visit_order")
 
-            print(f"[OR-TOOLS] 添加 {len(locked_positions)} 条硬约束: "
-                  f"{locked_positions}  (step → node)")
+                # 关键修复：用 SetRange 直接收缩变量域，而非 solver.Add()。
+                # solver.Add(CumulVar == val) 在路由模型中约束传播不可靠，
+                # 导致求解器误判无可行解。SetRange 直接作用于变量域，100% 生效。
+                for step, node in locked_positions.items():
+                    routing_idx = manager.NodeToIndex(node)
+                    order_dim.CumulVar(routing_idx).SetRange(int(step), int(step))
+
+                print(f"[OR-TOOLS] 添加 {len(locked_positions)} 条硬约束 (SetRange): "
+                      f"{locked_positions}  (step → node)")
 
             order, obj = _solve(routing, manager, _default_search_params())
 
