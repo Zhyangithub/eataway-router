@@ -387,61 +387,42 @@ def _greedy_tsp_from(matrix, start=0):
     return order
 
 
-def _ortools_tsp(matrix, start=0):
+def _ortools_tsp(matrix, start=0, locked_positions=None):
     """
     使用 Google OR-Tools 求解 TSP 全局最优路线。
     输入：行×列的秒数矩阵（已包含实时路况），start 为仓库节点索引。
-    返回：访问顺序列表（不含起点 start），格式与 _greedy_tsp_from 相同。
-    失败时自动回退到贪心算法。
+
+    locked_positions: dict { 访问步数(int) → 矩阵节点索引(int) }
+                      depot 出发时步数 = 0，第 1 站步数 = 1，以此类推。
+                      例如 {2: 5, 4: 8} 表示：
+                          第 2 步必须访问矩阵节点 5，
+                          第 4 步必须访问矩阵节点 8。
+                      OR-Tools 添加"visit_order"维度，depot 累计值从 0 开始，
+                      每访问一站 +1。对锁定节点施加等式约束
+                      CumulVar(node) == step，将其钉死在指定槽位。
+                      未锁定节点在剩余槽位内完全自由优化。
+
+    返回：(order, solved_with_locks)
+        order: 访问顺序列表（不含起点 start），格式与 _greedy_tsp_from 相同。
+        solved_with_locks: bool，True 表示含锁定约束求解成功，
+                           False 表示降级（无约束或贪心）。
     """
     try:
         from ortools.constraint_solver import routing_enums_pb2
         from ortools.constraint_solver import pywrapcp
     except ImportError:
-        print("[OR-TOOLS] ✗ ortools 未安装，回退到贪心算法。请在 requirements.txt 中添加 ortools")
-        return _greedy_tsp_from(matrix, start)
+        print("[OR-TOOLS] ✗ ortools 未安装，回退到贪心算法")
+        return _greedy_tsp_from(matrix, start), False
 
     n = len(matrix)
     if n <= 2:
-        # 只有1个门店，无需优化
-        return [i for i in range(n) if i != start]
+        return [i for i in range(n) if i != start], (not locked_positions)
 
-    try:
-        manager = pywrapcp.RoutingIndexManager(n, 1, start)
-        routing = pywrapcp.RoutingModel(manager)
-
-        # 时间回调：使用实时路况矩阵中的秒数
-        def time_callback(from_index, to_index):
-            i = manager.IndexToNode(from_index)
-            j = manager.IndexToNode(to_index)
-            return int(matrix[i][j])
-
-        transit_idx = routing.RegisterTransitCallback(time_callback)
-        routing.SetArcCostEvaluatorOfAllVehicles(transit_idx)
-
-        search_params = pywrapcp.DefaultRoutingSearchParameters()
-
-        # 初始解：PATH_CHEAPEST_ARC 通常比贪心最近邻更好
-        search_params.first_solution_strategy = (
-            routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
-        )
-
-        # 局部搜索：引导式局部搜索（GLS），在时间限制内持续改进
-        search_params.local_search_metaheuristic = (
-            routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
-        )
-
-        # 对于 25 个节点给 5 秒已绰绰有余，通常 <1 秒就收敛
-        search_params.time_limit.seconds = 5
-        search_params.log_search = False
-
+    def _solve(routing, manager, search_params):
+        """求解并提取路线顺序，返回 (order, objective) 或 (None, None)。"""
         solution = routing.SolveWithParameters(search_params)
-
         if not solution:
-            print("[OR-TOOLS] ✗ 未找到解，回退到贪心算法")
-            return _greedy_tsp_from(matrix, start)
-
-        # 提取路线顺序
+            return None, None
         order = []
         index = routing.Start(0)
         while not routing.IsEnd(index):
@@ -449,28 +430,96 @@ def _ortools_tsp(matrix, start=0):
             if node != start:
                 order.append(node)
             index = solution.Value(routing.NextVar(index))
+        return order, solution.ObjectiveValue()
 
-        total_sec = solution.ObjectiveValue()
+    def _build_base_model():
+        """构建基础路由模型（不含锁定约束）。"""
+        mgr = pywrapcp.RoutingIndexManager(n, 1, start)
+        mdl = pywrapcp.RoutingModel(mgr)
 
-        # 正确计算贪心的完整回路时间（含最后一站返回仓库）
-        greedy_order = _greedy_tsp_from(matrix, start)
-        greedy_sec = 0
-        prev = start
-        for node in greedy_order:
-            greedy_sec += matrix[prev][node]
-            prev = node
-        greedy_sec += matrix[prev][start]  # 最后一站 → 仓库
+        def time_callback(from_index, to_index):
+            i = mgr.IndexToNode(from_index)
+            j = mgr.IndexToNode(to_index)
+            return int(matrix[i][j])
 
-        improvement = (greedy_sec - total_sec) / max(greedy_sec, 1) * 100
-        print(f"[OR-TOOLS] ✓ {n} 节点 | OR-Tools={round(total_sec/60)}min "
-              f"贪心={round(greedy_sec/60)}min 节省={improvement:.1f}%")
+        transit_idx = mdl.RegisterTransitCallback(time_callback)
+        mdl.SetArcCostEvaluatorOfAllVehicles(transit_idx)
+        return mgr, mdl
 
-        return order
+    def _default_search_params():
+        sp = pywrapcp.DefaultRoutingSearchParameters()
+        sp.first_solution_strategy = (
+            routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+        )
+        sp.local_search_metaheuristic = (
+            routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
+        )
+        sp.time_limit.seconds = 5
+        sp.log_search = False
+        return sp
+
+    try:
+        # ── 阶段 1：带锁定约束的全局优化 ──────────────────────
+        if locked_positions:
+            manager, routing = _build_base_model()
+
+            # 添加 visit_order 维度：depot 累计值 = 0，每站 +1
+            routing.AddConstantDimension(
+                1,       # 每段弧 +1
+                n + 1,   # 累计上限
+                True,    # depot 从 0 开始
+                "visit_order",
+            )
+            order_dim = routing.GetDimensionOrDie("visit_order")
+            solver    = routing.solver()
+
+            for step, node in locked_positions.items():
+                routing_idx = manager.NodeToIndex(node)
+                solver.Add(order_dim.CumulVar(routing_idx) == int(step))
+
+            print(f"[OR-TOOLS] 添加 {len(locked_positions)} 条硬约束: "
+                  f"{locked_positions}  (step → node)")
+
+            order, obj = _solve(routing, manager, _default_search_params())
+
+            if order is not None:
+                # 对比贪心
+                greedy_order = _greedy_tsp_from(matrix, start)
+                greedy_sec = sum(
+                    matrix[([start] + greedy_order)[i]][([start] + greedy_order)[i + 1]]
+                    for i in range(len(greedy_order))
+                ) + matrix[greedy_order[-1]][start]
+                improvement = (greedy_sec - obj) / max(greedy_sec, 1) * 100
+                print(f"[OR-TOOLS] ✓ {n} 节点 | 锁定 {len(locked_positions)} | "
+                      f"OR-Tools={round(obj/60)}min 贪心={round(greedy_sec/60)}min "
+                      f"节省={improvement:.1f}%")
+                return order, True
+
+            print("[OR-TOOLS] ✗ 带锁定约束无解，降级到无约束全局优化…")
+
+        # ── 阶段 2：无约束全局优化（降级） ────────────────────
+        manager, routing = _build_base_model()
+        order, obj = _solve(routing, manager, _default_search_params())
+
+        if order is not None:
+            greedy_order = _greedy_tsp_from(matrix, start)
+            greedy_sec = sum(
+                matrix[([start] + greedy_order)[i]][([start] + greedy_order)[i + 1]]
+                for i in range(len(greedy_order))
+            ) + matrix[greedy_order[-1]][start]
+            improvement = (greedy_sec - obj) / max(greedy_sec, 1) * 100
+            print(f"[OR-TOOLS] ✓ {n} 节点（无约束降级） | "
+                  f"OR-Tools={round(obj/60)}min 贪心={round(greedy_sec/60)}min "
+                  f"节省={improvement:.1f}%")
+            return order, False
+
+        print("[OR-TOOLS] ✗ 无约束也未找到解，回退到贪心算法")
+        return _greedy_tsp_from(matrix, start), False
 
     except Exception as e:
         import traceback
         print(f"[OR-TOOLS] ✗ 异常，回退到贪心算法: {e}\n{traceback.format_exc()}")
-        return _greedy_tsp_from(matrix, start)
+        return _greedy_tsp_from(matrix, start), False
 
 
 def _stats_from_matrices(full_order, time_matrix, dist_matrix, has_traffic):
@@ -510,14 +559,18 @@ def _stats_from_matrices(full_order, time_matrix, dist_matrix, has_traffic):
     }
 
 
-def optimize_route(stores, departure_time=None):
+def optimize_route(stores, departure_time=None, locked_indices=None):
     """
     对门店列表进行路线优化。
 
     departure_time: Unix 时间戳（int/float），None 则使用当前时间。
+    locked_indices: set/list，stores 列表中需要锁定访问位置的索引（0-indexed）。
+                    锁定门店会被转换为 OR-Tools 硬约束 {访问步数: 矩阵节点}，
+                    在全局 N×N 距离矩阵中进行整体优化，未锁定门店自由调度。
 
     返回 (optimized_stores, stats_dict) 或 (None, error_string)。
-    stats_dict 包含 duration_min, duration_sec, distance_km, traffic_aware。
+    stats_dict 包含 duration_min, duration_sec, distance_km, traffic_aware,
+               以及 locks_honored (bool) 表示锁定约束是否被满足。
     """
     valid_stores = [s for s in stores if s.get('lat') and s.get('lng')
                     and str(s['lat']).strip() not in ('', 'nan', 'None')
@@ -527,12 +580,50 @@ def optimize_route(stores, departure_time=None):
         return None, "Inga butiker med giltiga koordinater"
 
     if len(valid_stores) == 1:
-        return valid_stores, {"duration_min": 0, "duration_sec": 0, "distance_km": 0.0, "traffic_aware": False}
+        return valid_stores, {"duration_min": 0, "duration_sec": 0,
+                              "distance_km": 0.0, "traffic_aware": False,
+                              "locks_honored": True}
 
     # ── 确定出发时间戳 ─────────────────────────────────────
     dep_ts = int(departure_time) if departure_time else int(_time.time())
     print(f"[OPTIMIZE] departure={datetime.fromtimestamp(dep_ts).strftime('%Y-%m-%d %H:%M:%S')}, "
           f"stores={len(valid_stores)}")
+
+    # ── 构建 locked_positions: {访问步数 → 矩阵节点索引} ──
+    # stores 可能有坐标缺失而被过滤的项，需要建立 stores→valid_stores 索引映射。
+    # 矩阵节点编号：0 = 仓库，1..n = valid_stores[0..n-1]。
+    # visit_order 维度：depot 累计值 = 0，第 1 站 = 1，第 2 站 = 2，…
+    # 所以 valid_stores[k] 对应的矩阵节点 = k+1，步数也 = k+1。
+    locked_positions = None  # dict {step(int): matrix_node(int)}
+    if locked_indices:
+        locked_set = set(locked_indices)
+        # stores 原始索引 → valid_stores 索引
+        valid_idx_map = {}
+        vi = 0
+        for orig_i, s in enumerate(stores):
+            if (s.get('lat') and s.get('lng')
+                    and str(s['lat']).strip() not in ('', 'nan', 'None')
+                    and str(s['lng']).strip() not in ('', 'nan', 'None')):
+                valid_idx_map[orig_i] = vi
+                vi += 1
+
+        # 构建 {step: node}
+        # 前端发送的 stores 列表已是用户期望的顺序，
+        # locked 的门店应该钉死在 valid_stores 空间中的对应位置。
+        # valid_idx = valid_idx_map[orig_i]，矩阵节点 = valid_idx + 1，
+        # 步数 = valid_idx + 1（depot=0 出发后第 1 站步数=1）。
+        lp = {}
+        for orig_i in sorted(locked_set):
+            if orig_i not in valid_idx_map:
+                continue
+            valid_idx = valid_idx_map[orig_i]
+            matrix_node = valid_idx + 1
+            step = valid_idx + 1
+            lp[step] = matrix_node
+        if lp:
+            locked_positions = lp
+            print(f"[OPTIMIZE] locked_positions (step→node): {locked_positions} "
+                  f"（stores 原始索引 {sorted(locked_set & set(valid_idx_map))}）")
 
     # ── 策略1：Distance Matrix API + OR-Tools TSP ─────────────
     wh_lat, wh_lng = WAREHOUSE_COORD.split(',')
@@ -542,19 +633,24 @@ def optimize_route(stores, departure_time=None):
     if len(all_nodes) <= 25:
         time_m, dist_m, matrix_has_traffic = _distance_matrix_timed(all_nodes, all_nodes, dep_ts)
         if time_m and len(time_m) == len(all_nodes):
-            full_order  = _ortools_tsp(time_m, start=0)
+            # 全局优化：所有门店 + 锁定硬约束一起传入 OR-Tools
+            full_order, locks_honored = _ortools_tsp(
+                time_m, start=0, locked_positions=locked_positions,
+            )
             store_order = [idx - 1 for idx in full_order if idx > 0]
             optimized   = [valid_stores[i] for i in store_order]
-            print(f"[OPTIMIZE] ✓ OR-Tools TSP order: {store_order}")
-            # ★ 直接从矩阵计算 stats — 不再调 Directions API
-            #   矩阵本身来自 Routes API v2（有路况），一次 API 调用搞定全部
+            print(f"[OPTIMIZE] ✓ OR-Tools TSP order: {store_order} "
+                  f"(locks_honored={locks_honored})")
             stats = _stats_from_matrices(full_order, time_m, dist_m, matrix_has_traffic)
+            stats["locks_honored"] = locks_honored
             return optimized, stats
         print("[OPTIMIZE] Distance Matrix failed, falling back…")
     else:
         print(f"[OPTIMIZE] {len(all_nodes)} nodes > 25, skipping Distance Matrix, using Directions")
 
     # ── 策略2/3：Directions API optimize:true（Fallback）───
+    # 注意：Directions API 的 optimize:true 不支持锁定约束，
+    # 降级后 locks_honored = False。
     coords = "|".join(f"{s['lat']},{s['lng']}" for s in valid_stores)
 
     def _call(optimize, use_traffic):
@@ -566,7 +662,7 @@ def optimize_route(stores, departure_time=None):
             "key":         API_KEY,
         }
         if use_traffic:
-            p["departure_time"] = str(int(_time.time()))   # ★ 始终用当前时间
+            p["departure_time"] = str(int(_time.time()))
             p["traffic_model"]  = "best_guess"
         return http_requests.get(
             "https://maps.googleapis.com/maps/api/directions/json",
@@ -594,6 +690,7 @@ def optimize_route(stores, departure_time=None):
             "duration_sec": dur_s,
             "distance_km":  round(dist_m / 1000, 1),
             "traffic_aware": has_traffic,
+            "locks_honored": False,  # Directions API 不支持锁定
         }
     return None, data.get('error_message', data['status'])
 
@@ -1424,8 +1521,9 @@ def api_reorder(driver_name):
 
     Body: { "stores": [ {name, lat, lng, locked: bool}, ... ] }
 
-    Locked stores stay at their current index.
-    Unlocked stores are re-optimized by Google Maps to fill the remaining slots.
+    锁定的门店通过 locked_indices 传入 optimize_route，被纳入完整 N×N 距离矩阵。
+    OR-Tools 在感知所有门店地理位置的前提下，通过序列维度约束保持锁定门店的
+    相对顺序，同时全局优化未锁定门店的插入位置。
     """
     if driver_name not in DRIVERS:
         return jsonify({"ok": False, "error": "Okänd chaufför"}), 404
@@ -1459,52 +1557,43 @@ def api_reorder(driver_name):
             patched.append(s)
         store_list = patched
 
-    locked_positions = {}   # {index: store_dict}
-    unlocked_stores  = []
+    # ── 收集锁定索引，剥离 locked 字段 ──────────────────────────
+    # 锁定门店保持相对顺序的约束由 optimize_route / OR-Tools 处理，
+    # 此处不再做任何手工拆分或拼合。
+    locked_indices = {i for i, s in enumerate(store_list) if s.get("locked")}
+    all_stores = [{k: v for k, v in s.items() if k != "locked"} for s in store_list]
 
-    for i, s in enumerate(store_list):
-        if s.get("locked"):
-            locked_positions[i] = {k: v for k, v in s.items() if k != "locked"}
-        else:
-            unlocked_stores.append({k: v for k, v in s.items() if k != "locked"})
+    locked_names = [all_stores[i]["name"] for i in sorted(locked_indices)]
+    print(f"[REORDER] {driver_name}: {len(all_stores)} 站 | "
+          f"锁定 {len(locked_indices)} 站: {locked_names}")
 
-    # ── Optimize unlocked portion ──────────────────────────────
-    optimization_warning = None
+    # ── 整体优化（含锁定约束）──────────────────────────────────
+    optimization_warning  = None
     optimize_traffic_aware = False
-    if unlocked_stores:
-        optimized_unlocked, stats_or_err = optimize_route(unlocked_stores)
-        if not optimized_unlocked:
-            # Fallback: keep unlocked stores in their current order
-            # instead of failing the entire reorder
-            print(f"[REORDER] optimize_route failed for {driver_name}: {stats_or_err}, using current order")
-            optimized_unlocked = unlocked_stores
-            optimization_warning = str(stats_or_err)
-        else:
-            # 保留 optimize_route 返回的 traffic_aware 标志
-            if isinstance(stats_or_err, dict):
-                optimize_traffic_aware = stats_or_err.get("traffic_aware", False)
-                print(f"[REORDER] optimize_route traffic_aware={optimize_traffic_aware}")
+    locks_honored = True  # 默认认为锁定被满足（无锁定时也为 True）
+
+    optimized, stats_or_err = optimize_route(
+        all_stores,
+        locked_indices=locked_indices if locked_indices else None,
+    )
+
+    if not optimized:
+        # Fallback: keep current order
+        print(f"[REORDER] optimize_route failed for {driver_name}: {stats_or_err}, using current order")
+        optimized = all_stores
+        optimization_warning = str(stats_or_err)
+        locks_honored = bool(locked_indices)  # 原样保留 = 锁定自然成立
     else:
-        optimized_unlocked = []
+        if isinstance(stats_or_err, dict):
+            optimize_traffic_aware = stats_or_err.get("traffic_aware", False)
+            locks_honored = stats_or_err.get("locks_honored", True)
+            print(f"[REORDER] optimize_route traffic_aware={optimize_traffic_aware}, "
+                  f"locks_honored={locks_honored}")
 
-    # ── Merge: locked stores hold their slots, unlocked fill the rest ─
-    final = [None] * len(store_list)
-    for idx, s in locked_positions.items():
-        final[idx] = s
-
-    unlocked_iter = iter(optimized_unlocked)
-    for i in range(len(final)):
-        if final[i] is None:
-            try:
-                final[i] = next(unlocked_iter)
-            except StopIteration:
-                break
-
-    # Remove any remaining None slots (safety)
-    final = [s for s in final if s is not None]
+    final = optimized
 
     # ── Get accurate stats for the complete merged route ───────
-    print(f"[REORDER] Getting stats for merged route ({len(final)} stores)…")
+    print(f"[REORDER] Getting stats for final route ({len(final)} stores)…")
     stats = get_route_stats(final, departure_time=int(_time.time()))
     if stats:
         print(f"[REORDER] get_route_stats returned: traffic_aware={stats.get('traffic_aware')}, "
@@ -1546,6 +1635,7 @@ def api_reorder(driver_name):
         "duration": r.get("duration"),
         "distance": r.get("distance"),
         "traffic_aware": r.get("traffic_aware", False),
+        "locks_honored": locks_honored,
         "warning": optimization_warning,
     })
 
