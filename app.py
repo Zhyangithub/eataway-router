@@ -397,10 +397,15 @@ def _ortools_tsp(matrix, start=0, locked_positions=None):
                       例如 {2: 5, 4: 8} 表示：
                           第 2 步必须访问矩阵节点 5，
                           第 4 步必须访问矩阵节点 8。
-                      OR-Tools 添加"visit_order"维度，depot 累计值从 0 开始，
-                      每访问一站 +1。对锁定节点施加等式约束
-                      CumulVar(node) == step，将其钉死在指定槽位。
-                      未锁定节点在剩余槽位内完全自由优化。
+
+                      实现方式：
+                      1. CumulVar 维度约束：用 SetRange 钉死锁定节点的位置，
+                         防止 GLS 元启发式在改进阶段移动它们。
+                      2. 手动构建初始解：将锁定节点放在指定槽位，未锁定节点
+                         按贪心最近邻填入剩余槽位。
+                      3. SolveFromAssignment：直接从手动初始解开始 GLS 优化，
+                         完全跳过 FirstSolutionStrategy（PATH_CHEAPEST_ARC /
+                         LOCAL_CHEAPEST_INSERTION 等都无法可靠处理 CumulVar）。
 
     返回：(order, solved_with_locks)
         order: 访问顺序列表（不含起点 start），格式与 _greedy_tsp_from 相同。
@@ -418,11 +423,8 @@ def _ortools_tsp(matrix, start=0, locked_positions=None):
     if n <= 2:
         return [i for i in range(n) if i != start], (not locked_positions)
 
-    def _solve(routing, manager, search_params):
-        """求解并提取路线顺序，返回 (order, objective) 或 (None, None)。"""
-        solution = routing.SolveWithParameters(search_params)
-        if not solution:
-            return None, None
+    def _extract_order(routing, manager, solution):
+        """从 solution 中提取访问顺序列表（不含 start）。"""
         order = []
         index = routing.Start(0)
         while not routing.IsEnd(index):
@@ -430,7 +432,7 @@ def _ortools_tsp(matrix, start=0, locked_positions=None):
             if node != start:
                 order.append(node)
             index = solution.Value(routing.NextVar(index))
-        return order, solution.ObjectiveValue()
+        return order
 
     def _build_base_model():
         """构建基础路由模型（不含锁定约束）。"""
@@ -458,70 +460,114 @@ def _ortools_tsp(matrix, start=0, locked_positions=None):
         sp.log_search = False
         return sp
 
+    def _log_comparison(label, obj, locked_count=0):
+        """对比 OR-Tools 解与贪心解并打印日志。"""
+        greedy_order = _greedy_tsp_from(matrix, start)
+        path = [start] + greedy_order
+        greedy_sec = sum(matrix[path[i]][path[i + 1]] for i in range(len(path) - 1))
+        greedy_sec += matrix[greedy_order[-1]][start]
+        improvement = (greedy_sec - obj) / max(greedy_sec, 1) * 100
+        lock_info = f" | 锁定 {locked_count}" if locked_count else ""
+        print(f"[OR-TOOLS] ✓ {n} 节点{lock_info}{label} | "
+              f"OR-Tools={round(obj/60)}min 贪心={round(greedy_sec/60)}min "
+              f"节省={improvement:.1f}%")
+
     try:
         # ── 阶段 1：带锁定约束的全局优化 ──────────────────────
         if locked_positions:
             manager, routing = _build_base_model()
 
-            # 用显式 transit callback 注册"步数"维度（比 AddConstantDimension 更可靠）
+            # ─── 1a. 添加 CumulVar 维度约束 ─────────────────
+            # 约束作用：在 GLS 改进阶段防止锁定节点被移动。
+            # 不依赖 FirstSolutionStrategy——初始解由我们手动构建。
             def unit_transit(from_index, to_index):
                 return 1
 
-            unit_transit_id = routing.RegisterTransitCallback(unit_transit)
-            dim_ok = routing.AddDimension(
-                unit_transit_id,
-                0,       # slack_max = 0（无松弛）
-                n + 1,   # capacity（累计上限）
-                True,    # fix_start_cumul_to_zero（depot 从 0 开始）
+            unit_transit_idx = routing.RegisterTransitCallback(unit_transit)
+            routing.AddDimension(
+                unit_transit_idx,
+                0,       # slack = 0（无松弛）
+                n + 1,   # capacity（步数上限）
+                True,    # fix_start_cumul_to_zero（depot 步数 = 0）
                 "visit_order",
             )
+            order_dim = routing.GetDimensionOrDie("visit_order")
 
-            if not dim_ok:
-                print("[OR-TOOLS] ✗ AddDimension('visit_order') 失败，跳过锁定约束")
+            for step, node in locked_positions.items():
+                routing_idx = manager.NodeToIndex(node)
+                order_dim.CumulVar(routing_idx).SetRange(int(step), int(step))
+
+            print(f"[OR-TOOLS] CumulVar 约束: {locked_positions}  (step → node)")
+
+            # ─── 1b. 手动构建满足约束的初始解 ────────────────
+            # 核心思路：将锁定节点放入指定槽位，
+            # 剩余槽位用贪心最近邻（基于完整距离矩阵）填充未锁定节点。
+            locked_node_set = set(locked_positions.values())
+            unlocked_nodes  = [i for i in range(n)
+                               if i != start and i not in locked_node_set]
+
+            # 初始路线数组：route[0] = 第 1 站，route[1] = 第 2 站 …
+            route = [None] * (n - 1)
+            for step, node in locked_positions.items():
+                route[step - 1] = node  # step 从 1 开始，数组从 0 开始
+
+            # 贪心最近邻填充未锁定节点
+            remaining = set(unlocked_nodes)
+            for i in range(len(route)):
+                if route[i] is not None:
+                    continue
+                # 前一个节点（用于计算距离）
+                prev_node = start if i == 0 else route[i - 1]
+                # 从 remaining 中选最近的
+                best_node, best_cost = None, float('inf')
+                for cand in remaining:
+                    cost = matrix[prev_node][cand]
+                    if cost < best_cost:
+                        best_node, best_cost = cand, cost
+                if best_node is not None:
+                    route[i] = best_node
+                    remaining.discard(best_node)
+
+            # 安全检查：如果还有剩余节点（不应该发生），追加到末尾
+            for leftover in remaining:
+                for i in range(len(route)):
+                    if route[i] is None:
+                        route[i] = leftover
+                        break
+
+            print(f"[OR-TOOLS] 手动初始解: depot → {route[:5]}{'…' if len(route)>5 else ''} "
+                  f"→ depot  ({len(route)} 站)")
+
+            # ─── 1c. 从手动初始解开始优化 ────────────────────
+            search_params = _default_search_params()
+            routing.CloseModelWithParameters(search_params)
+            initial_assignment = routing.ReadAssignmentFromRoutes([route], True)
+
+            if initial_assignment:
+                solution = routing.SolveFromAssignmentWithParameters(
+                    initial_assignment, search_params,
+                )
+                if solution:
+                    order = _extract_order(routing, manager, solution)
+                    _log_comparison("", solution.ObjectiveValue(),
+                                    len(locked_positions))
+                    return order, True
+                else:
+                    print("[OR-TOOLS] ✗ SolveFromAssignment 返回 None（GLS 无法改进？）")
             else:
-                order_dim = routing.GetDimensionOrDie("visit_order")
-
-                # 关键修复：用 SetRange 直接收缩变量域，而非 solver.Add()。
-                # solver.Add(CumulVar == val) 在路由模型中约束传播不可靠，
-                # 导致求解器误判无可行解。SetRange 直接作用于变量域，100% 生效。
-                for step, node in locked_positions.items():
-                    routing_idx = manager.NodeToIndex(node)
-                    order_dim.CumulVar(routing_idx).SetRange(int(step), int(step))
-
-                print(f"[OR-TOOLS] 添加 {len(locked_positions)} 条硬约束 (SetRange): "
-                      f"{locked_positions}  (step → node)")
-
-            order, obj = _solve(routing, manager, _default_search_params())
-
-            if order is not None:
-                # 对比贪心
-                greedy_order = _greedy_tsp_from(matrix, start)
-                greedy_sec = sum(
-                    matrix[([start] + greedy_order)[i]][([start] + greedy_order)[i + 1]]
-                    for i in range(len(greedy_order))
-                ) + matrix[greedy_order[-1]][start]
-                improvement = (greedy_sec - obj) / max(greedy_sec, 1) * 100
-                print(f"[OR-TOOLS] ✓ {n} 节点 | 锁定 {len(locked_positions)} | "
-                      f"OR-Tools={round(obj/60)}min 贪心={round(greedy_sec/60)}min "
-                      f"节省={improvement:.1f}%")
-                return order, True
+                print("[OR-TOOLS] ✗ ReadAssignmentFromRoutes 失败"
+                      f"（路线可能不满足约束）: {route[:8]}…")
 
             print("[OR-TOOLS] ✗ 带锁定约束无解，降级到无约束全局优化…")
 
         # ── 阶段 2：无约束全局优化（降级） ────────────────────
         manager, routing = _build_base_model()
-        order, obj = _solve(routing, manager, _default_search_params())
+        search_params = _default_search_params()
+        solution = routing.SolveWithParameters(search_params)
 
-        if order is not None:
-            greedy_order = _greedy_tsp_from(matrix, start)
-            greedy_sec = sum(
-                matrix[([start] + greedy_order)[i]][([start] + greedy_order)[i + 1]]
-                for i in range(len(greedy_order))
-            ) + matrix[greedy_order[-1]][start]
-            improvement = (greedy_sec - obj) / max(greedy_sec, 1) * 100
-            print(f"[OR-TOOLS] ✓ {n} 节点（无约束降级） | "
-                  f"OR-Tools={round(obj/60)}min 贪心={round(greedy_sec/60)}min "
-                  f"节省={improvement:.1f}%")
+        if solution:
+            order = _extract_order(routing, manager, solution)
+            _log_comparison("（无约束降级）", solution.ObjectiveValue())
             return order, False
 
         print("[OR-TOOLS] ✗ 无约束也未找到解，回退到贪心算法")
@@ -603,7 +649,7 @@ def optimize_route(stores, departure_time=None, locked_indices=None):
     # ── 构建 locked_positions: {访问步数 → 矩阵节点索引} ──
     # stores 可能有坐标缺失而被过滤的项，需要建立 stores→valid_stores 索引映射。
     # 矩阵节点编号：0 = 仓库，1..n = valid_stores[0..n-1]。
-    # visit_order 维度：depot 累计值 = 0，第 1 站 = 1，第 2 站 = 2，…
+    # 步数编号：depot = 0，第 1 站 = 1，第 2 站 = 2，…
     # 所以 valid_stores[k] 对应的矩阵节点 = k+1，步数也 = k+1。
     locked_positions = None  # dict {step(int): matrix_node(int)}
     if locked_indices:
