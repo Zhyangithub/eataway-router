@@ -446,16 +446,19 @@ def _ortools_tsp(matrix, start=0):
             index = solution.Value(routing.NextVar(index))
 
         total_sec = solution.ObjectiveValue()
+
+        # 正确计算贪心的完整回路时间（含最后一站返回仓库）
         greedy_order = _greedy_tsp_from(matrix, start)
-        greedy_sec   = sum(
-            matrix[greedy_order[i-1] if i > 0 else start][greedy_order[i]]
-            for i in range(len(greedy_order))
-        )
+        greedy_sec = 0
+        prev = start
+        for node in greedy_order:
+            greedy_sec += matrix[prev][node]
+            prev = node
+        greedy_sec += matrix[prev][start]  # 最后一站 → 仓库
+
         improvement = (greedy_sec - total_sec) / max(greedy_sec, 1) * 100
-        print(f"[OR-TOOLS] ✓ 求解成功: {n} 节点, "
-              f"OR-Tools={round(total_sec/60)}min, "
-              f"贪心={round(greedy_sec/60)}min, "
-              f"提升={improvement:.1f}%")
+        print(f"[OR-TOOLS] ✓ {n} 节点 | OR-Tools={round(total_sec/60)}min "
+              f"贪心={round(greedy_sec/60)}min 节省={improvement:.1f}%")
 
         return order
 
@@ -561,84 +564,118 @@ def get_route_stats(ordered_stores, departure_time=None):
     """
     Calculate duration/distance for a fixed (already-ordered) route.
     Returns dict with duration_min, duration_sec, distance_km, traffic_aware.
+
+    根本原因说明：Google Directions API 在途径点超过约 10 个时不返回
+    duration_in_traffic。解决方案：把完整路线拆成每段 ≤ 9 个途径点的小段，
+    分别请求再累加，每段都能获得实时路况时间。
     """
     if not ordered_stores:
         return {"duration_min": 0, "duration_sec": 0, "distance_km": 0.0, "traffic_aware": False}
 
-    # ★ 始终用当前实时时间戳，确保 Google 返回最新路况
+    # ★ 始终用当前实时时间戳
     dep_ts = str(int(_time.time()))
 
-    waypoints_str = "|".join(f"{s['lat']},{s['lng']}" for s in ordered_stores)
+    # 构建完整路径节点列表：仓库 → 所有门店 → 仓库
+    wh_lat, wh_lng = WAREHOUSE_COORD.split(',')
+    warehouse = {"lat": wh_lat, "lng": wh_lng}
+    full_path = [warehouse] + list(ordered_stores) + [warehouse]
 
-    # Attempt 1: with real-time traffic
-    params = {
-        "origin":         WAREHOUSE_COORD,
-        "destination":    WAREHOUSE_COORD,
-        "waypoints":      waypoints_str,
-        "key":            API_KEY,
-        "departure_time": dep_ts,
-        "traffic_model":  "best_guess",
-    }
-    print(f"[STATS] Attempt 1: {len(ordered_stores)} waypoints, dep={dep_ts}")
-    try:
-        resp = http_requests.get(
-            "https://maps.googleapis.com/maps/api/directions/json",
-            params=params, timeout=10)
-        data = resp.json()
-        if data["status"] == "OK":
-            legs   = data["routes"][0]["legs"]
-            has_traffic = any("duration_in_traffic" in l for l in legs)
-            dur_s  = sum(l.get("duration_in_traffic", l["duration"])["value"] for l in legs)
-            dist_m = sum(l["distance"]["value"] for l in legs)
-            # ★ 详细日志：显示是否使用了路况数据 + 精确秒数
-            if has_traffic:
-                static_s = sum(l["duration"]["value"] for l in legs)
-                diff = dur_s - static_s
-                print(f"[STATS] ✓ TRAFFIC dep={dep_ts} dur={dur_s}s ({round(dur_s/60)}min) "
-                      f"static={static_s}s diff={diff:+d}s dist={round(dist_m/1000,1)}km")
+    # Google Directions API 在 waypoints ≤ 9 时稳定返回 duration_in_traffic
+    # 每段取 11 个节点（origin + 9 waypoints + destination），相邻段共享端点
+    MAX_NODES_PER_CHUNK = 11  # origin + 9 waypoints + destination
+    STEP = MAX_NODES_PER_CHUNK - 1  # 每次前进 10 个节点，端点重叠
+
+    total_dur_s  = 0
+    total_dist_m = 0
+    total_has_traffic = False
+    chunk_count  = 0
+    traffic_chunks = 0
+
+    print(f"[STATS] {len(ordered_stores)} waypoints → "
+          f"{max(1, (len(full_path)-1 + STEP-1)//STEP)} chunks, dep={dep_ts}")
+
+    i = 0
+    while i < len(full_path) - 1:
+        chunk = full_path[i: i + MAX_NODES_PER_CHUNK]
+        if len(chunk) < 2:
+            break
+
+        origin  = f"{chunk[0]['lat']},{chunk[0]['lng']}"
+        dest    = f"{chunk[-1]['lat']},{chunk[-1]['lng']}"
+        mid_wps = chunk[1:-1]
+        chunk_count += 1
+
+        params = {
+            "origin":         origin,
+            "destination":    dest,
+            "key":            API_KEY,
+            "departure_time": dep_ts,
+            "traffic_model":  "best_guess",
+        }
+        if mid_wps:
+            params["waypoints"] = "|".join(f"{s['lat']},{s['lng']}" for s in mid_wps)
+
+        try:
+            resp = http_requests.get(
+                "https://maps.googleapis.com/maps/api/directions/json",
+                params=params, timeout=10)
+            data = resp.json()
+
+            if data["status"] == "OK":
+                legs = data["routes"][0]["legs"]
+                chunk_has_traffic = any("duration_in_traffic" in l for l in legs)
+                chunk_dur_s  = sum(l.get("duration_in_traffic", l["duration"])["value"] for l in legs)
+                chunk_dist_m = sum(l["distance"]["value"] for l in legs)
+                total_dur_s  += chunk_dur_s
+                total_dist_m += chunk_dist_m
+                if chunk_has_traffic:
+                    total_has_traffic = True
+                    traffic_chunks += 1
             else:
-                print(f"[STATS] ✗ NO TRAFFIC (API 未返回 duration_in_traffic) "
-                      f"dep={dep_ts} dur={dur_s}s ({round(dur_s/60)}min) dist={round(dist_m/1000,1)}km")
-            return {
-                "duration_min": round(dur_s / 60),
-                "duration_sec": dur_s,
-                "distance_km":  round(dist_m / 1000, 1),
-                "traffic_aware": has_traffic,
-            }
-        else:
-            print(f"[STATS] ✗ Attempt 1 FAILED: status={data['status']} "
-                  f"msg={data.get('error_message','')} waypoints={len(ordered_stores)}")
-    except Exception as e:
-        print(f"[STATS] traffic call failed: {e}")
+                # 单段失败：回退到无路况请求
+                print(f"[STATS] chunk {chunk_count} traffic failed ({data['status']}), "
+                      f"retrying without traffic")
+                params_fb = {k: v for k, v in params.items()
+                             if k not in ("departure_time", "traffic_model")}
+                resp_fb = http_requests.get(
+                    "https://maps.googleapis.com/maps/api/directions/json",
+                    params=params_fb, timeout=10)
+                data_fb = resp_fb.json()
+                if data_fb["status"] == "OK":
+                    legs_fb = data_fb["routes"][0]["legs"]
+                    total_dur_s  += sum(l["duration"]["value"] for l in legs_fb)
+                    total_dist_m += sum(l["distance"]["value"] for l in legs_fb)
+                else:
+                    print(f"[STATS] chunk {chunk_count} fallback also failed: {data_fb['status']}")
 
-    # Attempt 2: without traffic (fallback)
-    params2 = {
-        "origin":      WAREHOUSE_COORD,
-        "destination": WAREHOUSE_COORD,
-        "waypoints":   waypoints_str,
-        "key":         API_KEY,
+        except Exception as e:
+            print(f"[STATS] chunk {chunk_count} exception: {e}")
+
+        i += STEP
+
+    if total_dur_s == 0:
+        print(f"[STATS] ✗ All chunks failed, returning None")
+        return None
+
+    hours   = total_dur_s // 3600
+    mins    = (total_dur_s % 3600) // 60
+    dur_str = f"{hours}h {mins}min" if hours > 0 else f"{mins}min"
+
+    if total_has_traffic:
+        print(f"[STATS] ✓ TRAFFIC: {dur_str} ({total_dur_s}s) "
+              f"{round(total_dist_m/1000,1)}km "
+              f"[{traffic_chunks}/{chunk_count} chunks had traffic data]")
+    else:
+        print(f"[STATS] ✗ NO TRAFFIC: {dur_str} ({total_dur_s}s) "
+              f"{round(total_dist_m/1000,1)}km "
+              f"[{chunk_count} chunks, 0 returned duration_in_traffic]")
+
+    return {
+        "duration_min":  round(total_dur_s / 60),
+        "duration_sec":  total_dur_s,
+        "distance_km":   round(total_dist_m / 1000, 1),
+        "traffic_aware": total_has_traffic,
     }
-    try:
-        resp2 = http_requests.get(
-            "https://maps.googleapis.com/maps/api/directions/json",
-            params=params2, timeout=10)
-        data2 = resp2.json()
-        if data2["status"] == "OK":
-            legs   = data2["routes"][0]["legs"]
-            dur_s  = sum(l["duration"]["value"] for l in legs)
-            dist_m = sum(l["distance"]["value"] for l in legs)
-            print(f"[STATS] ✗ FALLBACK (no traffic param) dur={dur_s}s ({round(dur_s/60)}min) "
-                  f"dist={round(dist_m/1000,1)}km")
-            return {
-                "duration_min": round(dur_s / 60),
-                "duration_sec": dur_s,
-                "distance_km":  round(dist_m / 1000, 1),
-                "traffic_aware": False,
-            }
-    except Exception as e:
-        print(f"[STATS] fallback call failed: {e}")
-
-    return None
 
 
 def _gmaps_point(s):
@@ -690,7 +727,7 @@ def run_all_drivers():
 
             urls = generate_urls(optimized)
 
-            # ★ 精确时间格式：显示小时+分钟，让路况差异可见
+            # ★ 精确时间格式：显示小时+分钟
             dur_sec = stats_or_err.get('duration_sec', stats_or_err.get('duration_min', 0) * 60)
             hours   = dur_sec // 3600
             mins    = (dur_sec % 3600) // 60
@@ -699,7 +736,11 @@ def run_all_drivers():
             else:
                 dur_str = f"{mins} min"
 
-            traffic_aware = stats_or_err.get('traffic_aware', False)
+            # 区分两种 traffic 标志：
+            #   route_optimized_with_traffic  = 路线排序时使用了实时路况矩阵（OR-Tools 输入）
+            #   duration_traffic_aware        = 最终显示的时间本身包含实时路况
+            route_opt_traffic = stats_or_err.get('traffic_aware', False)   # 来自 optimize_route
+            dur_traffic       = stats_or_err.get('traffic_aware', False)   # 来自 get_route_stats（分段请求）
 
             results[driver] = {
                 "status":        "ok",
@@ -710,12 +751,14 @@ def run_all_drivers():
                 "duration":      dur_str,
                 "duration_sec":  dur_sec,
                 "distance":      f"{stats_or_err['distance_km']} km",
-                "traffic_aware": traffic_aware,
+                "traffic_aware":              dur_traffic,        # 时间是否含路况（UI 主标志）
+                "route_optimized_with_traffic": route_opt_traffic, # 排序是否用了路况
                 "unmatched":     unmatched if isinstance(unmatched, list) else [],
                 "unmatched_count": len(unmatched) if isinstance(unmatched, list) else 0,
             }
-            print(f"[RUN_ALL] {driver}: {dur_str} ({dur_sec}s), "
-                  f"{stats_or_err['distance_km']}km, traffic={traffic_aware}")
+            print(f"[RUN_ALL] {driver}: {dur_str} ({dur_sec}s) "
+                  f"{stats_or_err['distance_km']}km | "
+                  f"排序路况={route_opt_traffic} 时间路况={dur_traffic}")
         except Exception as e:
             results[driver] = {"status": "error", "error": str(e)}
     return results
@@ -728,7 +771,8 @@ def do_generate():
         state["running"] = True
     try:
         state["results"]      = run_all_drivers()
-        state["generated_at"] = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+        from datetime import timezone
+        state["generated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         save_state()
     finally:
         state["running"] = False
