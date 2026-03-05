@@ -357,6 +357,7 @@ def _distance_matrix_timed(origins, destinations, departure_ts):
 def _greedy_tsp_from(matrix, start=0):
     """
     贪心最近邻 TSP（Nearest Neighbor Heuristic）。
+    作为 OR-Tools 失败时的保底方案。
     从 start 节点出发，每次选未访问中耗时最短的节点。
     返回完整访问顺序列表（不含起点）。
     """
@@ -375,11 +376,93 @@ def _greedy_tsp_from(matrix, start=0):
         visited[best_j] = True
         order.append(best_j)
         cur = best_j
-    # 补上任何未被访问的节点（理论上不会发生）
     for j in range(n):
         if not visited[j]:
             order.append(j)
     return order
+
+
+def _ortools_tsp(matrix, start=0):
+    """
+    使用 Google OR-Tools 求解 TSP 全局最优路线。
+    输入：行×列的秒数矩阵（已包含实时路况），start 为仓库节点索引。
+    返回：访问顺序列表（不含起点 start），格式与 _greedy_tsp_from 相同。
+    失败时自动回退到贪心算法。
+    """
+    try:
+        from ortools.constraint_solver import routing_enums_pb2
+        from ortools.constraint_solver import pywrapcp
+    except ImportError:
+        print("[OR-TOOLS] ✗ ortools 未安装，回退到贪心算法。请在 requirements.txt 中添加 ortools")
+        return _greedy_tsp_from(matrix, start)
+
+    n = len(matrix)
+    if n <= 2:
+        # 只有1个门店，无需优化
+        return [i for i in range(n) if i != start]
+
+    try:
+        manager = pywrapcp.RoutingIndexManager(n, 1, start)
+        routing = pywrapcp.RoutingModel(manager)
+
+        # 时间回调：使用实时路况矩阵中的秒数
+        def time_callback(from_index, to_index):
+            i = manager.IndexToNode(from_index)
+            j = manager.IndexToNode(to_index)
+            return int(matrix[i][j])
+
+        transit_idx = routing.RegisterTransitCallback(time_callback)
+        routing.SetArcCostEvaluatorOfAllVehicles(transit_idx)
+
+        search_params = pywrapcp.DefaultRoutingSearchParameters()
+
+        # 初始解：PATH_CHEAPEST_ARC 通常比贪心最近邻更好
+        search_params.first_solution_strategy = (
+            routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+        )
+
+        # 局部搜索：引导式局部搜索（GLS），在时间限制内持续改进
+        search_params.local_search_metaheuristic = (
+            routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
+        )
+
+        # 对于 25 个节点给 5 秒已绰绰有余，通常 <1 秒就收敛
+        search_params.time_limit.seconds = 5
+        search_params.log_search = False
+
+        solution = routing.SolveWithParameters(search_params)
+
+        if not solution:
+            print("[OR-TOOLS] ✗ 未找到解，回退到贪心算法")
+            return _greedy_tsp_from(matrix, start)
+
+        # 提取路线顺序
+        order = []
+        index = routing.Start(0)
+        while not routing.IsEnd(index):
+            node = manager.IndexToNode(index)
+            if node != start:
+                order.append(node)
+            index = solution.Value(routing.NextVar(index))
+
+        total_sec = solution.ObjectiveValue()
+        greedy_order = _greedy_tsp_from(matrix, start)
+        greedy_sec   = sum(
+            matrix[greedy_order[i-1] if i > 0 else start][greedy_order[i]]
+            for i in range(len(greedy_order))
+        )
+        improvement = (greedy_sec - total_sec) / max(greedy_sec, 1) * 100
+        print(f"[OR-TOOLS] ✓ 求解成功: {n} 节点, "
+              f"OR-Tools={round(total_sec/60)}min, "
+              f"贪心={round(greedy_sec/60)}min, "
+              f"提升={improvement:.1f}%")
+
+        return order
+
+    except Exception as e:
+        import traceback
+        print(f"[OR-TOOLS] ✗ 异常，回退到贪心算法: {e}\n{traceback.format_exc()}")
+        return _greedy_tsp_from(matrix, start)
 
 
 def optimize_route(stores, departure_time=None):
@@ -414,10 +497,10 @@ def optimize_route(stores, departure_time=None):
     if len(all_nodes) <= 25:
         matrix, matrix_has_traffic = _distance_matrix_timed(all_nodes, all_nodes, dep_ts)
         if matrix and len(matrix) == len(all_nodes):
-            full_order = _greedy_tsp_from(matrix, start=0)
+            full_order = _ortools_tsp(matrix, start=0)
             store_order = [idx - 1 for idx in full_order if idx > 0]
             optimized   = [valid_stores[i] for i in store_order]
-            print(f"[OPTIMIZE] ✓ Traffic-aware TSP order: {store_order}")
+            print(f"[OPTIMIZE] ✓ OR-Tools TSP order: {store_order}")
             # ★ 用当前实时时间戳获取 stats，而非计划出发时间，确保获得最新路况
             stats = get_route_stats(optimized, departure_time=int(_time.time()))
             if stats:
