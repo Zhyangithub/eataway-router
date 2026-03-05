@@ -1649,14 +1649,24 @@ def api_reorder(driver_name):
 
     final = optimized
 
-    # ── Get accurate stats for the complete merged route ───────
-    print(f"[REORDER] Getting stats for final route ({len(final)} stores)…")
-    stats = get_route_stats(final, departure_time=int(_time.time()))
-    if stats:
-        print(f"[REORDER] get_route_stats returned: traffic_aware={stats.get('traffic_aware')}, "
+    # ── 复用 optimize_route 返回的 stats，避免重复 API 请求 ────
+    # optimize_route 内部已通过 _stats_from_matrices 从距离矩阵直接计算
+    # duration/distance，无需再调 get_route_stats 发起第二次矩阵请求。
+    # 仅在 optimize_route 失败（fallback 到原序）时才补充获取 stats。
+    stats = None
+    if isinstance(stats_or_err, dict) and "duration_sec" in stats_or_err:
+        stats = stats_or_err
+        print(f"[REORDER] 复用 optimize_route stats: traffic_aware={stats.get('traffic_aware')}, "
               f"dur={stats.get('duration_sec')}s, dist={stats.get('distance_km')}km")
     else:
-        print(f"[REORDER] get_route_stats returned None!")
+        # optimize_route 失败，需要单独获取 stats
+        print(f"[REORDER] Getting stats for final route ({len(final)} stores)…")
+        stats = get_route_stats(final, departure_time=int(_time.time()))
+        if stats:
+            print(f"[REORDER] get_route_stats returned: traffic_aware={stats.get('traffic_aware')}, "
+                  f"dur={stats.get('duration_sec')}s, dist={stats.get('distance_km')}km")
+        else:
+            print(f"[REORDER] get_route_stats returned None!")
 
     urls = generate_urls(final)
 
@@ -1674,11 +1684,8 @@ def api_reorder(driver_name):
         r["duration"]      = f"{hours} h {mins} min" if hours > 0 else f"{mins} min"
         r["duration_sec"]  = dur_sec
         r["distance"]      = f"{stats['distance_km']} km"
-        # ★ FIX: 如果 optimize_route 返回了 traffic_aware=True，保留它
-        #   即使 get_route_stats 没返回 duration_in_traffic
-        r["traffic_aware"] = stats.get("traffic_aware", False) or optimize_traffic_aware
-        print(f"[REORDER] Final traffic_aware={r['traffic_aware']} "
-              f"(stats={stats.get('traffic_aware')}, optimize={optimize_traffic_aware})")
+        r["traffic_aware"] = stats.get("traffic_aware", False)
+        print(f"[REORDER] Final traffic_aware={r['traffic_aware']}")
     elif not r.get("duration"):
         r["duration"] = "—"
         r["distance"] = "—"
