@@ -14,8 +14,13 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 app = Flask(__name__)
 
 # ── 配置 ────────────────────────────────────────────────────
-API_KEY        = "AIzaSyDzAxmeKWeWQGK3G5VVnEDLM0IY-RTjzrw"
+# ── 配置 ────────────────────────────────────────────────────
+API_KEY        = os.environ.get("GOOGLE_API_KEY", "")
 WAREHOUSE_COORD = "59.8542194,17.6650221"
+
+# 增加一个安全卡点：如果启动时没读到 Key，在终端大声警告
+if not API_KEY:
+    print("⚠️ [VARNING] GOOGLE_API_KEY saknas i miljövariablerna! Google API-anrop kommer att misslyckas.")
 DRIVERS        = ["Abbe", "Saman", "Sarkis", "Cornelia", "Pawlos"]
 
 STATE_FILE  = "last_results.json"
