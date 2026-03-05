@@ -173,7 +173,7 @@ def _distance_matrix_routes_v2(origins, destinations, departure_ts):
     """
     策略 A: 调用 Routes API v2 (Compute Route Matrix)。
     支持单次请求最多 625 个元素 (25×25)，返回实时路况。
-    失败时返回 None, False。
+    返回 (time_matrix秒, dist_matrix米, has_traffic)，失败返回 (None, None, False)。
     """
     n_orig = len(origins)
     n_dest = len(destinations)
@@ -193,7 +193,6 @@ def _distance_matrix_routes_v2(origins, destinations, departure_ts):
         "travelMode":         "DRIVE",
         "routingPreference":  "TRAFFIC_AWARE",
     }
-    # 不设 departureTime — Google 默认使用当前时间，等价于 "now"
 
     headers = {
         "Content-Type":     "application/json",
@@ -211,35 +210,33 @@ def _distance_matrix_routes_v2(origins, destinations, departure_ts):
 
         print(f"[MATRIX-v2] HTTP {resp.status_code}, content-length={len(resp.text)}")
 
-        # 尝试解析 JSON，无论状态码（流式响应可能在非200时也返回有效数据）
         try:
             elements = resp.json()
         except Exception as parse_err:
             print(f"[MATRIX-v2] ✗ JSON parse failed: {parse_err}")
             print(f"[MATRIX-v2] ✗ Raw body: {resp.text[:2000]}")
-            return None, False
+            return None, None, False
 
-        # 如果返回的是错误对象 {"error": {...}}
         if isinstance(elements, dict) and "error" in elements:
             err = elements["error"]
             print(f"[MATRIX-v2] ✗ API error: code={err.get('code')} "
                   f"status={err.get('status')} msg={err.get('message','')[:500]}")
-            return None, False
+            return None, None, False
 
         if not isinstance(elements, list):
             print(f"[MATRIX-v2] ✗ unexpected type={type(elements).__name__}: {str(elements)[:500]}")
-            return None, False
+            return None, None, False
 
-        # 解析元素
-        matrix = [[999999] * n_dest for _ in range(n_orig)]
-        ok_count = 0
+        # 同时解析时间矩阵和距离矩阵
+        time_matrix = [[999999] * n_dest for _ in range(n_orig)]
+        dist_matrix = [[0]      * n_dest for _ in range(n_orig)]
+        ok_count  = 0
         err_count = 0
 
         for el in elements:
             oi = el.get("originIndex", 0)
             di = el.get("destinationIndex", 0)
 
-            # 检查元素级别的错误
             el_status = el.get("status", {})
             if isinstance(el_status, dict) and el_status.get("code", 0) != 0:
                 if err_count < 3:
@@ -250,29 +247,31 @@ def _distance_matrix_routes_v2(origins, destinations, departure_ts):
             if "duration" in el:
                 dur_str = el["duration"]
                 secs = int(dur_str.rstrip("s")) if isinstance(dur_str, str) else 0
-                matrix[oi][di] = secs
+                time_matrix[oi][di] = secs
+                dist_matrix[oi][di] = el.get("distanceMeters", 0)
                 ok_count += 1
 
         if ok_count == 0:
             print(f"[MATRIX-v2] ✗ 0 ok cells in {len(elements)} elements, errors={err_count}")
             if elements:
                 print(f"[MATRIX-v2] ✗ First element: {str(elements[0])[:500]}")
-            return None, False
+            return None, None, False
 
         print(f"[MATRIX-v2] ✓ {n_orig}x{n_dest} matrix — ok={ok_count}, "
               f"err={err_count}, traffic_aware=True")
-        return matrix, True
+        return time_matrix, dist_matrix, True
 
     except Exception as e:
         import traceback
         print(f"[MATRIX-v2] ✗ exception: {e}\n{traceback.format_exc()}")
-        return None, False
+        return None, None, False
 
 
 def _distance_matrix_legacy_chunked(origins, destinations, departure_ts):
     """
     策略 B: 旧版 Distance Matrix API 分块请求。
     每块 ≤ 100 元素，自动拆分大矩阵。
+    返回 (time_matrix秒, dist_matrix米, has_traffic)，失败返回 (None, None, False)。
     """
     MAX_ELEMENTS = 100
 
@@ -286,7 +285,8 @@ def _distance_matrix_legacy_chunked(origins, destinations, departure_ts):
     print(f"[MATRIX-legacy] Splitting into {total_chunks} chunks of {chunk_rows} rows × {n_dest} cols "
           f"= {chunk_rows * n_dest} elements/chunk")
 
-    full_matrix = []
+    full_time_matrix = []
+    full_dist_matrix = []
     traffic_count = 0
     static_count  = 0
 
@@ -312,9 +312,10 @@ def _distance_matrix_legacy_chunked(origins, destinations, departure_ts):
                 print(f"[MATRIX-legacy] ✗ chunk {chunk_num} status={data['status']} "
                       f"msg={data.get('error_message','')} "
                       f"full={json.dumps(data, ensure_ascii=False)[:500]}")
-                return None, False
+                return None, None, False
             for row in data["rows"]:
-                cols = []
+                time_cols = []
+                dist_cols = []
                 for el in row["elements"]:
                     if el["status"] == "OK":
                         if "duration_in_traffic" in el:
@@ -323,30 +324,34 @@ def _distance_matrix_legacy_chunked(origins, destinations, departure_ts):
                         else:
                             secs = el["duration"]["value"]
                             static_count += 1
+                        meters = el["distance"]["value"]
                     else:
-                        secs = 999999
-                    cols.append(secs)
-                full_matrix.append(cols)
+                        secs   = 999999
+                        meters = 0
+                    time_cols.append(secs)
+                    dist_cols.append(meters)
+                full_time_matrix.append(time_cols)
+                full_dist_matrix.append(dist_cols)
         except Exception as e:
             print(f"[MATRIX-legacy] ✗ chunk {chunk_num} exception: {e}")
-            return None, False
+            return None, None, False
 
     has_traffic = traffic_count > 0
-    print(f"[MATRIX-legacy] ✓ {len(full_matrix)}×{n_dest} matrix — "
+    print(f"[MATRIX-legacy] ✓ {len(full_time_matrix)}×{n_dest} matrix — "
           f"traffic_cells={traffic_count}, static_cells={static_count}, "
           f"traffic_aware={has_traffic}")
-    return full_matrix, has_traffic
+    return full_time_matrix, full_dist_matrix, has_traffic
 
 
 def _distance_matrix_timed(origins, destinations, departure_ts):
     """
     统一入口：优先使用 Routes API v2，失败则自动回退到旧版 Distance Matrix API（分块）。
-    返回 (行×列的秒数矩阵, 是否使用了路况数据)，失败返回 (None, False)。
+    返回 (time_matrix秒, dist_matrix米, has_traffic)，失败返回 (None, None, False)。
     """
     # ── 策略 A: Routes API v2 ──────────────────────────────
-    matrix, has_traffic = _distance_matrix_routes_v2(origins, destinations, departure_ts)
-    if matrix:
-        return matrix, has_traffic
+    time_m, dist_m, has_traffic = _distance_matrix_routes_v2(origins, destinations, departure_ts)
+    if time_m:
+        return time_m, dist_m, has_traffic
 
     # ── 策略 B: 旧版 Distance Matrix API（分块）────────────
     print(f"[MATRIX] Routes API v2 failed, falling back to legacy Distance Matrix API (chunked)…")
@@ -468,6 +473,43 @@ def _ortools_tsp(matrix, start=0):
         return _greedy_tsp_from(matrix, start)
 
 
+def _stats_from_matrices(full_order, time_matrix, dist_matrix, has_traffic):
+    """
+    直接从已有的时间/距离矩阵计算路线总统计，完全不调用任何 API。
+
+    full_order: OR-Tools / 贪心返回的顺序列表（不含起点 0），
+                路线为 0 → full_order[0] → ... → full_order[-1] → 0
+    time_matrix: N×N 秒数矩阵（含实时路况，来自 Routes API v2）
+    dist_matrix: N×N 距离矩阵（米）
+    has_traffic: 矩阵本身是否含路况信息
+
+    返回 stats dict，格式与 get_route_stats 相同。
+    """
+    route = [0] + list(full_order)   # 仓库(0) → 所有门店
+    total_sec  = 0
+    total_dist = 0
+    for i in range(len(route) - 1):
+        a, b = route[i], route[i + 1]
+        total_sec  += time_matrix[a][b]
+        total_dist += dist_matrix[a][b]
+    # 最后一站返回仓库
+    total_sec  += time_matrix[route[-1]][0]
+    total_dist += dist_matrix[route[-1]][0]
+
+    hours = total_sec // 3600
+    mins  = (total_sec % 3600) // 60
+    dur_str = f"{hours}h {mins}min" if hours > 0 else f"{mins}min"
+    print(f"[STATS-MATRIX] ✓ {'TRAFFIC' if has_traffic else 'NO TRAFFIC'}: "
+          f"{dur_str} ({total_sec}s) {round(total_dist/1000,1)}km "
+          f"[直接从矩阵计算，无额外 API 调用]")
+    return {
+        "duration_min":  round(total_sec / 60),
+        "duration_sec":  total_sec,
+        "distance_km":   round(total_dist / 1000, 1),
+        "traffic_aware": has_traffic,
+    }
+
+
 def optimize_route(stores, departure_time=None):
     """
     对门店列表进行路线优化。
@@ -492,25 +534,21 @@ def optimize_route(stores, departure_time=None):
     print(f"[OPTIMIZE] departure={datetime.fromtimestamp(dep_ts).strftime('%Y-%m-%d %H:%M:%S')}, "
           f"stores={len(valid_stores)}")
 
-    # ── 策略1：Distance Matrix API + 贪心 TSP ─────────────
+    # ── 策略1：Distance Matrix API + OR-Tools TSP ─────────────
     wh_lat, wh_lng = WAREHOUSE_COORD.split(',')
     warehouse  = {"lat": wh_lat, "lng": wh_lng}
     all_nodes  = [warehouse] + valid_stores
 
     if len(all_nodes) <= 25:
-        matrix, matrix_has_traffic = _distance_matrix_timed(all_nodes, all_nodes, dep_ts)
-        if matrix and len(matrix) == len(all_nodes):
-            full_order = _ortools_tsp(matrix, start=0)
+        time_m, dist_m, matrix_has_traffic = _distance_matrix_timed(all_nodes, all_nodes, dep_ts)
+        if time_m and len(time_m) == len(all_nodes):
+            full_order  = _ortools_tsp(time_m, start=0)
             store_order = [idx - 1 for idx in full_order if idx > 0]
             optimized   = [valid_stores[i] for i in store_order]
             print(f"[OPTIMIZE] ✓ OR-Tools TSP order: {store_order}")
-            # ★ 用当前实时时间戳获取 stats，而非计划出发时间，确保获得最新路况
-            stats = get_route_stats(optimized, departure_time=int(_time.time()))
-            if stats:
-                stats["traffic_aware"] = stats.get("traffic_aware", False) or matrix_has_traffic
-            else:
-                stats = {"duration_min": 0, "duration_sec": 0, "distance_km": 0.0,
-                         "traffic_aware": matrix_has_traffic}
+            # ★ 直接从矩阵计算 stats — 不再调 Directions API
+            #   矩阵本身来自 Routes API v2（有路况），一次 API 调用搞定全部
+            stats = _stats_from_matrices(full_order, time_m, dist_m, matrix_has_traffic)
             return optimized, stats
         print("[OPTIMIZE] Distance Matrix failed, falling back…")
     else:
@@ -562,119 +600,46 @@ def optimize_route(stores, departure_time=None):
 
 def get_route_stats(ordered_stores, departure_time=None):
     """
-    Calculate duration/distance for a fixed (already-ordered) route.
+    计算已排好序的路线的时间/距离统计（供 reorder 场景使用）。
+    使用 Routes API v2 矩阵（支持瑞典路况），不再使用 Directions API。
     Returns dict with duration_min, duration_sec, distance_km, traffic_aware.
-
-    根本原因说明：Google Directions API 在途径点超过约 10 个时不返回
-    duration_in_traffic。解决方案：把完整路线拆成每段 ≤ 9 个途径点的小段，
-    分别请求再累加，每段都能获得实时路况时间。
     """
     if not ordered_stores:
         return {"duration_min": 0, "duration_sec": 0, "distance_km": 0.0, "traffic_aware": False}
 
-    # ★ 始终用当前实时时间戳
-    dep_ts = str(int(_time.time()))
-
-    # 构建完整路径节点列表：仓库 → 所有门店 → 仓库
+    dep_ts = int(_time.time())
     wh_lat, wh_lng = WAREHOUSE_COORD.split(',')
     warehouse = {"lat": wh_lat, "lng": wh_lng}
-    full_path = [warehouse] + list(ordered_stores) + [warehouse]
+    all_nodes = [warehouse] + list(ordered_stores)  # index 0=仓库, 1..n=门店
 
-    # Google Directions API 在 waypoints ≤ 9 时稳定返回 duration_in_traffic
-    # 每段取 11 个节点（origin + 9 waypoints + destination），相邻段共享端点
-    MAX_NODES_PER_CHUNK = 11  # origin + 9 waypoints + destination
-    STEP = MAX_NODES_PER_CHUNK - 1  # 每次前进 10 个节点，端点重叠
+    print(f"[STATS] Fetching {len(all_nodes)}×{len(all_nodes)} matrix for route stats…")
+    time_m, dist_m, has_traffic = _distance_matrix_timed(all_nodes, all_nodes, dep_ts)
 
-    total_dur_s  = 0
-    total_dist_m = 0
-    total_has_traffic = False
-    chunk_count  = 0
-    traffic_chunks = 0
-
-    print(f"[STATS] {len(ordered_stores)} waypoints → "
-          f"{max(1, (len(full_path)-1 + STEP-1)//STEP)} chunks, dep={dep_ts}")
-
-    i = 0
-    while i < len(full_path) - 1:
-        chunk = full_path[i: i + MAX_NODES_PER_CHUNK]
-        if len(chunk) < 2:
-            break
-
-        origin  = f"{chunk[0]['lat']},{chunk[0]['lng']}"
-        dest    = f"{chunk[-1]['lat']},{chunk[-1]['lng']}"
-        mid_wps = chunk[1:-1]
-        chunk_count += 1
-
-        params = {
-            "origin":         origin,
-            "destination":    dest,
-            "key":            API_KEY,
-            "departure_time": dep_ts,
-            "traffic_model":  "best_guess",
-        }
-        if mid_wps:
-            params["waypoints"] = "|".join(f"{s['lat']},{s['lng']}" for s in mid_wps)
-
-        try:
-            resp = http_requests.get(
-                "https://maps.googleapis.com/maps/api/directions/json",
-                params=params, timeout=10)
-            data = resp.json()
-
-            if data["status"] == "OK":
-                legs = data["routes"][0]["legs"]
-                chunk_has_traffic = any("duration_in_traffic" in l for l in legs)
-                chunk_dur_s  = sum(l.get("duration_in_traffic", l["duration"])["value"] for l in legs)
-                chunk_dist_m = sum(l["distance"]["value"] for l in legs)
-                total_dur_s  += chunk_dur_s
-                total_dist_m += chunk_dist_m
-                if chunk_has_traffic:
-                    total_has_traffic = True
-                    traffic_chunks += 1
-            else:
-                # 单段失败：回退到无路况请求
-                print(f"[STATS] chunk {chunk_count} traffic failed ({data['status']}), "
-                      f"retrying without traffic")
-                params_fb = {k: v for k, v in params.items()
-                             if k not in ("departure_time", "traffic_model")}
-                resp_fb = http_requests.get(
-                    "https://maps.googleapis.com/maps/api/directions/json",
-                    params=params_fb, timeout=10)
-                data_fb = resp_fb.json()
-                if data_fb["status"] == "OK":
-                    legs_fb = data_fb["routes"][0]["legs"]
-                    total_dur_s  += sum(l["duration"]["value"] for l in legs_fb)
-                    total_dist_m += sum(l["distance"]["value"] for l in legs_fb)
-                else:
-                    print(f"[STATS] chunk {chunk_count} fallback also failed: {data_fb['status']}")
-
-        except Exception as e:
-            print(f"[STATS] chunk {chunk_count} exception: {e}")
-
-        i += STEP
-
-    if total_dur_s == 0:
-        print(f"[STATS] ✗ All chunks failed, returning None")
+    if not time_m or len(time_m) != len(all_nodes):
+        print(f"[STATS] ✗ Matrix fetch failed, returning None")
         return None
 
-    hours   = total_dur_s // 3600
-    mins    = (total_dur_s % 3600) // 60
+    # 路线顺序：仓库(0) → store[0](1) → store[1](2) → ... → store[n-1](n) → 仓库(0)
+    route = list(range(len(all_nodes)))  # [0, 1, 2, ..., n]
+    total_sec  = 0
+    total_dist = 0
+    for i in range(len(route) - 1):
+        a, b = route[i], route[i + 1]
+        total_sec  += time_m[a][b]
+        total_dist += dist_m[a][b]
+    total_sec  += time_m[route[-1]][0]   # 最后门店 → 仓库
+    total_dist += dist_m[route[-1]][0]
+
+    hours = total_sec // 3600
+    mins  = (total_sec % 3600) // 60
     dur_str = f"{hours}h {mins}min" if hours > 0 else f"{mins}min"
-
-    if total_has_traffic:
-        print(f"[STATS] ✓ TRAFFIC: {dur_str} ({total_dur_s}s) "
-              f"{round(total_dist_m/1000,1)}km "
-              f"[{traffic_chunks}/{chunk_count} chunks had traffic data]")
-    else:
-        print(f"[STATS] ✗ NO TRAFFIC: {dur_str} ({total_dur_s}s) "
-              f"{round(total_dist_m/1000,1)}km "
-              f"[{chunk_count} chunks, 0 returned duration_in_traffic]")
-
+    print(f"[STATS] {'✓ TRAFFIC' if has_traffic else '✗ NO TRAFFIC'}: "
+          f"{dur_str} ({total_sec}s) {round(total_dist/1000,1)}km")
     return {
-        "duration_min":  round(total_dur_s / 60),
-        "duration_sec":  total_dur_s,
-        "distance_km":   round(total_dist_m / 1000, 1),
-        "traffic_aware": total_has_traffic,
+        "duration_min":  round(total_sec / 60),
+        "duration_sec":  total_sec,
+        "distance_km":   round(total_dist / 1000, 1),
+        "traffic_aware": has_traffic,
     }
 
 
