@@ -341,7 +341,7 @@ async function triggerGenerate() {
   const res = await fetch('/api/generate', { method: 'POST' });
   const d = await res.json();
   if (d.ok) {
-    setStatus('running', '⚙ Optimerar rutter med realtidstrafik...');
+    setStatus('running', '⚙ Optimerar rutter via OSRM...');
     startPolling();
   } else {
     btn.disabled = false;
@@ -501,9 +501,9 @@ async function fetchAndRender() {
 }
 
 function startPolling() {
-  setStatus('running', '⚙ Optimerar rutter via Google Maps API...');
+  setStatus('running', '⚙ Optimerar rutter via OSRM + OR-Tools...');
   pollStartedAt = Date.now();
-  if (!polling) polling = setInterval(fetchAndRender, 1500);
+  if (!polling) polling = setInterval(fetchAndRender, 5000);
 }
 
 // ★ Fix 3: Fire 1 minute before scheduled time, poll until generated_at changes
@@ -538,7 +538,7 @@ function startScheduledPolling() {
       const timedOut = Date.now() > deadline;
       if (done || timedOut) { clearInterval(polling); polling = null; }
     } catch(e) {}
-  }, 2000);
+  }, 5000);
 }
 
 
@@ -556,19 +556,13 @@ function render(data) {
     ? '<span class="spinner"></span> Kör...' : '▶ Generera Nu';
 
   if (running) {
-    setStatus('running', '⚙ Optimerar rutter via Google Maps API...');
+    setStatus('running', '⚙ Optimerar rutter via OSRM + OR-Tools...');
   } else if (hasResults) {
     const errCount = Object.values(results).filter(r => r.status === 'error').length;
-    const trafficCount = Object.values(results).filter(r => r.traffic_aware).length;
-    const totalOk = Object.values(results).filter(r => r.status === 'ok').length;
-    const trafficNote = totalOk > 0
-      ? ` | Trafik: ${trafficCount}/${totalOk} ${trafficCount === 0 ? '⚠ (statisk ETA)' : '✓'}`
-      : '';
-    // ★ Fix 4: display generated_at in local timezone
     const localTime = formatGeneratedAt(generated_at);
     setStatus(errCount ? 'error' : 'ok',
-      errCount ? `⚠ ${errCount} chaufför(er) fick fel — ${localTime}${trafficNote}`
-               : `✓ Alla rutter klara — ${localTime}${trafficNote}`);
+      errCount ? `⚠ ${errCount} chaufför(er) fick fel — ${localTime}`
+               : `✓ Alla rutter klara — ${localTime}`);
   } else {
     setStatus('idle', 'Inga rutter — klicka Generera Nu för att starta.');
   }
@@ -614,14 +608,10 @@ function renderCard(driver, r, delay, phone) {
       📱 WhatsApp
     </a>` : '';
 
-  const trafficTag = isOk ? (r.traffic_aware
-    ? '<span style="font-size:.55rem;color:var(--ok);letter-spacing:.08em">● TRAFIK</span>'
-    : '<span style="font-size:.55rem;color:var(--warn);letter-spacing:.08em">○ STATISK</span>') : '';
-
   const stats = isOk ? `
     <div class="card-stats">
       <div class="stat"><span class="stat-val">${r.store_count ?? '—'}</span><span class="stat-key">Stopp</span></div>
-      <div class="stat"><span class="stat-val">${r.duration ?? '—'}</span><span class="stat-key">Est. tid ${trafficTag}</span></div>
+      <div class="stat"><span class="stat-val">${r.duration ?? '—'}</span><span class="stat-key">Est. tid</span></div>
       <div class="stat"><span class="stat-val">${r.distance ?? '—'}</span><span class="stat-key">Distans</span></div>
     </div>` : '';
 

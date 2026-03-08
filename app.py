@@ -430,23 +430,28 @@ def _ortools_tsp(matrix, start=0, locked_positions=None):
 
             print("[OR-TOOLS] ✗ 带锁定约束无解，降级到无约束全局优化…")
 
-        # ── 阶段 2：无约束全局优化（降级） ────────────────────
+        # ── 阶段 2：无约束全局优化（降级或无锁定） ─────────────
         manager, routing = _build_base_model()
         search_params = _default_search_params()
         solution = routing.SolveWithParameters(search_params)
 
+        # 无锁定请求时 locks_honored=True（没有约束就不存在"未满足"）
+        # 有锁定但降级时 locks_honored=False
+        no_lock_requested = not locked_positions
+
         if solution:
             order = _extract_order(routing, manager, solution)
-            _log_comparison("（无约束降级）", solution.ObjectiveValue())
-            return order, False
+            label = "" if no_lock_requested else "（锁定降级）"
+            _log_comparison(label, solution.ObjectiveValue())
+            return order, no_lock_requested  # True if no locks, False if degraded
 
         print("[OR-TOOLS] ✗ 无约束也未找到解，回退到贪心算法")
-        return _greedy_tsp_from(matrix, start), False
+        return _greedy_tsp_from(matrix, start), no_lock_requested
 
     except Exception as e:
         import traceback
         print(f"[OR-TOOLS] ✗ 异常，回退到贪心算法: {e}\n{traceback.format_exc()}")
-        return _greedy_tsp_from(matrix, start), False
+        return _greedy_tsp_from(matrix, start), (not locked_positions)
 
 
 def _stats_from_matrices(full_order, time_matrix, dist_matrix):
@@ -470,6 +475,10 @@ def _stats_from_matrices(full_order, time_matrix, dist_matrix):
     # 最后一站返回仓库
     total_sec  += time_matrix[route[-1]][0]
     total_dist += dist_matrix[route[-1]][0]
+
+    # OSRM 返回浮点数，累加后可能有精度漂移，取整
+    total_sec  = round(total_sec)
+    total_dist = round(total_dist)
 
     hours = total_sec // 3600
     mins  = (total_sec % 3600) // 60
@@ -622,6 +631,9 @@ def get_route_stats(ordered_stores):
         total_dist += dist_m[a][b]
     total_sec  += time_m[route[-1]][0]   # 最后门店 → 仓库
     total_dist += dist_m[route[-1]][0]
+
+    total_sec  = round(total_sec)
+    total_dist = round(total_dist)
 
     hours = total_sec // 3600
     mins  = (total_sec % 3600) // 60
