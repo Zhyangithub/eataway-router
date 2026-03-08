@@ -4,7 +4,7 @@
 from flask import Flask, jsonify, render_template, request, send_file
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
-import json, os, io, urllib.parse, threading, time as _time
+import json, os, io, urllib.parse, threading
 from datetime import datetime
 import pandas as pd
 import requests as http_requests
@@ -13,7 +13,6 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
 app = Flask(__name__)
 
-# ── 配置 ────────────────────────────────────────────────────
 # ── 配置 ────────────────────────────────────────────────────
 WAREHOUSE_COORD = "59.8542194,17.6650221"
 DRIVERS        = ["Abbe", "Saman", "Sarkis", "Cornelia", "Pawlos"]
@@ -60,7 +59,9 @@ def load_state():
     if os.path.exists(EMAIL_CONFIG_FILE):
         with open(EMAIL_CONFIG_FILE, "r", encoding="utf-8") as f:
             saved_cfg = json.load(f)
-            # Env vars always take priority
+            # 先从文件加载，再用环境变量覆盖
+            if saved_cfg.get("sender"):
+                email_config["sender"] = saved_cfg["sender"]
             if os.environ.get("EMAIL_SENDER"):
                 email_config["sender"] = os.environ["EMAIL_SENDER"]
             if os.environ.get("RESEND_API_KEY"):
@@ -84,13 +85,13 @@ def save_emails():
         json.dump(driver_emails, f, ensure_ascii=False, indent=2)
 
 def save_email_config():
-    # Only save host/port to file; keep sender/password in env vars
+    # api_key 仅通过环境变量管理，不写入文件
     with open(EMAIL_CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump({"sender": email_config.get("sender","")},  # api_key stays in env
-                  f, ensure_ascii=False, indent=2)  # type: ignore
+        json.dump({"sender": email_config.get("sender", "")},
+                  f, ensure_ascii=False, indent=2)
 
 
-# ── 核心逻辑（来自 main.py）────────────────────────────────
+# ── 核心逻辑 ─────────────────────────────────────────────────
 def load_and_merge_data(driver_name):
     coords_file = 'coords.xlsx' if os.path.exists('coords.xlsx') else 'coords.csv'
     try:
@@ -172,9 +173,9 @@ def load_coord_dict():
 
 def _distance_matrix_osrm(origins, destinations):
     """
-    使用 OSRM 公共 API 计算距离/时间矩阵（完全免费，无需 API Key，无实时路况）。
+    使用 OSRM 公共 API 计算距离/时间矩阵（完全免费，无需 API Key）。
     文档：http://project-osrm.org/docs/v5.24.0/api/#table-service
-    返回 (time_matrix秒, dist_matrix米, has_traffic=False)，失败返回 (None, None, False)。
+    返回 (time_matrix秒, dist_matrix米)，失败返回 (None, None)。
     """
     n_orig = len(origins)
     n_dest = len(destinations)
@@ -191,23 +192,23 @@ def _distance_matrix_osrm(origins, destinations):
         f"&annotations=duration,distance"
     )
 
-    print(f"[OSRM] Requesting {n_orig}×{n_dest} matrix ({n_orig * n_dest} elements, 免费无路况)")
+    print(f"[OSRM] Requesting {n_orig}×{n_dest} matrix ({n_orig * n_dest} elements)")
     try:
         resp = http_requests.get(url, timeout=30)
         data = resp.json()
 
         if data.get("code") != "Ok":
             print(f"[OSRM] ✗ code={data.get('code')} message={data.get('message','')}")
-            return None, None, False
+            return None, None
 
         time_matrix = data.get("durations")   # 秒，可能含 None（不可达）
         dist_matrix = data.get("distances")   # 米，可能含 None
 
         if not time_matrix:
             print("[OSRM] ✗ 返回数据中缺少 durations 字段")
-            return None, None, False
+            return None, None
 
-        # distances 字段在部分 OSRM 版本中可能缺失，用 None 兜底
+        # distances 字段在部分 OSRM 版本中可能缺失，用零矩阵兜底
         if not dist_matrix:
             dist_matrix = [[0] * n_dest for _ in range(n_orig)]
 
@@ -219,21 +220,13 @@ def _distance_matrix_osrm(origins, destinations):
                 if dist_matrix[i][j] is None:
                     dist_matrix[i][j] = 0
 
-        print(f"[OSRM] ✓ {n_orig}×{n_dest} 矩阵成功（免费，无路况）")
-        return time_matrix, dist_matrix, False
+        print(f"[OSRM] ✓ {n_orig}×{n_dest} 矩阵成功")
+        return time_matrix, dist_matrix
 
     except Exception as e:
         import traceback
         print(f"[OSRM] ✗ 异常: {e}\n{traceback.format_exc()}")
-        return None, None, False
-
-
-def _distance_matrix_timed(origins, destinations, departure_ts=None):
-    """
-    统一入口：使用 OSRM 公共 API（完全免费，无实时路况）。
-    返回 (time_matrix秒, dist_matrix米, has_traffic=False)，失败返回 (None, None, False)。
-    """
-    return _distance_matrix_osrm(origins, destinations)
+        return None, None
 
 
 def _greedy_tsp_from(matrix, start=0):
@@ -267,7 +260,7 @@ def _greedy_tsp_from(matrix, start=0):
 def _ortools_tsp(matrix, start=0, locked_positions=None):
     """
     使用 Google OR-Tools 求解 TSP 全局最优路线。
-    输入：行×列的秒数矩阵（已包含实时路况），start 为仓库节点索引。
+    输入：行×列的秒数矩阵，start 为仓库节点索引。
 
     locked_positions: dict { 访问步数(int) → 矩阵节点索引(int) }
                       depot 出发时步数 = 0，第 1 站步数 = 1，以此类推。
@@ -456,17 +449,16 @@ def _ortools_tsp(matrix, start=0, locked_positions=None):
         return _greedy_tsp_from(matrix, start), False
 
 
-def _stats_from_matrices(full_order, time_matrix, dist_matrix, has_traffic):
+def _stats_from_matrices(full_order, time_matrix, dist_matrix):
     """
     直接从已有的时间/距离矩阵计算路线总统计，完全不调用任何 API。
 
     full_order: OR-Tools / 贪心返回的顺序列表（不含起点 0），
                 路线为 0 → full_order[0] → ... → full_order[-1] → 0
-    time_matrix: N×N 秒数矩阵（含实时路况，来自 Routes API v2）
+    time_matrix: N×N 秒数矩阵
     dist_matrix: N×N 距离矩阵（米）
-    has_traffic: 矩阵本身是否含路况信息
 
-    返回 stats dict，格式与 get_route_stats 相同。
+    返回 stats dict。
     """
     route = [0] + list(full_order)   # 仓库(0) → 所有门店
     total_sec  = 0
@@ -482,28 +474,25 @@ def _stats_from_matrices(full_order, time_matrix, dist_matrix, has_traffic):
     hours = total_sec // 3600
     mins  = (total_sec % 3600) // 60
     dur_str = f"{hours}h {mins}min" if hours > 0 else f"{mins}min"
-    print(f"[STATS-MATRIX] ✓ {'TRAFFIC' if has_traffic else 'NO TRAFFIC'}: "
-          f"{dur_str} ({total_sec}s) {round(total_dist/1000,1)}km "
+    print(f"[STATS-MATRIX] ✓ {dur_str} ({total_sec}s) {round(total_dist/1000,1)}km "
           f"[直接从矩阵计算，无额外 API 调用]")
     return {
         "duration_min":  round(total_sec / 60),
         "duration_sec":  total_sec,
         "distance_km":   round(total_dist / 1000, 1),
-        "traffic_aware": has_traffic,
     }
 
 
-def optimize_route(stores, departure_time=None, locked_indices=None):
+def optimize_route(stores, locked_indices=None):
     """
-    对门店列表进行路线优化。
+    对门店列表进行路线优化（使用 OSRM + OR-Tools TSP）。
 
-    departure_time: Unix 时间戳（int/float），None 则使用当前时间。
     locked_indices: set/list，stores 列表中需要锁定访问位置的索引（0-indexed）。
                     锁定门店会被转换为 OR-Tools 硬约束 {访问步数: 矩阵节点}，
                     在全局 N×N 距离矩阵中进行整体优化，未锁定门店自由调度。
 
     返回 (optimized_stores, stats_dict) 或 (None, error_string)。
-    stats_dict 包含 duration_min, duration_sec, distance_km, traffic_aware,
+    stats_dict 包含 duration_min, duration_sec, distance_km,
                以及 locks_honored (bool) 表示锁定约束是否被满足。
     """
     valid_stores = [s for s in stores if s.get('lat') and s.get('lng')
@@ -515,13 +504,9 @@ def optimize_route(stores, departure_time=None, locked_indices=None):
 
     if len(valid_stores) == 1:
         return valid_stores, {"duration_min": 0, "duration_sec": 0,
-                              "distance_km": 0.0, "traffic_aware": False,
-                              "locks_honored": True}
+                              "distance_km": 0.0, "locks_honored": True}
 
-    # ── 确定出发时间戳 ─────────────────────────────────────
-    dep_ts = int(departure_time) if departure_time else int(_time.time())
-    print(f"[OPTIMIZE] departure={datetime.fromtimestamp(dep_ts).strftime('%Y-%m-%d %H:%M:%S')}, "
-          f"stores={len(valid_stores)}")
+    print(f"[OPTIMIZE] stores={len(valid_stores)}")
 
     # ── 构建 locked_positions: {访问步数 → 矩阵节点索引} ──
     # stores 可能有坐标缺失而被过滤的项，需要建立 stores→valid_stores 索引映射。
@@ -564,7 +549,7 @@ def optimize_route(stores, departure_time=None, locked_indices=None):
     warehouse  = {"lat": wh_lat, "lng": wh_lng}
     all_nodes  = [warehouse] + valid_stores
 
-    time_m, dist_m, matrix_has_traffic = _distance_matrix_timed(all_nodes, all_nodes)
+    time_m, dist_m = _distance_matrix_osrm(all_nodes, all_nodes)
     if time_m and len(time_m) == len(all_nodes):
         full_order, locks_honored = _ortools_tsp(
             time_m, start=0, locked_positions=locked_positions,
@@ -572,12 +557,12 @@ def optimize_route(stores, departure_time=None, locked_indices=None):
         store_order = [idx - 1 for idx in full_order if idx > 0]
         optimized   = [valid_stores[i] for i in store_order]
         print(f"[OPTIMIZE] ✓ OR-Tools TSP order: {store_order} (locks_honored={locks_honored})")
-        stats = _stats_from_matrices(full_order, time_m, dist_m, matrix_has_traffic)
+        stats = _stats_from_matrices(full_order, time_m, dist_m)
         stats["locks_honored"] = locks_honored
         return optimized, stats
 
-    # ── OSRM 失败时：贪心最近邻保底（本地计算，零成本）──────
-    print("[OPTIMIZE] OSRM 失败，回退到贪心算法（本地计算）…")
+    # ── OSRM 失败时：Haversine + OR-Tools 保底（本地计算，零成本）──
+    print("[OPTIMIZE] OSRM 失败，回退到 Haversine + OR-Tools（本地计算）…")
     import math
 
     def _haversine_sec(a, b, speed_kmh=35):
@@ -601,28 +586,27 @@ def optimize_route(stores, departure_time=None, locked_indices=None):
     full_order, locks_honored = _ortools_tsp(fb_time, start=0, locked_positions=locked_positions)
     store_order = [idx - 1 for idx in full_order if idx > 0]
     optimized   = [valid_stores[i] for i in store_order]
-    stats = _stats_from_matrices(full_order, fb_time, fb_dist, False)
+    stats = _stats_from_matrices(full_order, fb_time, fb_dist)
     stats["locks_honored"] = locks_honored
-    print(f"[OPTIMIZE] 贪心 fallback 完成: {store_order}")
+    print(f"[OPTIMIZE] Haversine fallback 完成: {store_order}")
     return optimized, stats
 
 
-def get_route_stats(ordered_stores, departure_time=None):
+def get_route_stats(ordered_stores):
     """
     计算已排好序的路线的时间/距离统计（供 reorder 场景使用）。
-    使用 OSRM 矩阵（免费，无路况）。
-    Returns dict with duration_min, duration_sec, distance_km, traffic_aware.
+    使用 OSRM 矩阵。
+    Returns dict with duration_min, duration_sec, distance_km.
     """
     if not ordered_stores:
-        return {"duration_min": 0, "duration_sec": 0, "distance_km": 0.0, "traffic_aware": False}
+        return {"duration_min": 0, "duration_sec": 0, "distance_km": 0.0}
 
-    dep_ts = int(_time.time())
     wh_lat, wh_lng = WAREHOUSE_COORD.split(',')
     warehouse = {"lat": wh_lat, "lng": wh_lng}
     all_nodes = [warehouse] + list(ordered_stores)  # index 0=仓库, 1..n=门店
 
     print(f"[STATS] Fetching {len(all_nodes)}×{len(all_nodes)} matrix for route stats…")
-    time_m, dist_m, has_traffic = _distance_matrix_timed(all_nodes, all_nodes, dep_ts)
+    time_m, dist_m = _distance_matrix_osrm(all_nodes, all_nodes)
 
     if not time_m or len(time_m) != len(all_nodes):
         print(f"[STATS] ✗ Matrix fetch failed, returning None")
@@ -642,13 +626,11 @@ def get_route_stats(ordered_stores, departure_time=None):
     hours = total_sec // 3600
     mins  = (total_sec % 3600) // 60
     dur_str = f"{hours}h {mins}min" if hours > 0 else f"{mins}min"
-    print(f"[STATS] {'✓ TRAFFIC' if has_traffic else '✗ NO TRAFFIC'}: "
-          f"{dur_str} ({total_sec}s) {round(total_dist/1000,1)}km")
+    print(f"[STATS] ✓ {dur_str} ({total_sec}s) {round(total_dist/1000,1)}km")
     return {
         "duration_min":  round(total_sec / 60),
         "duration_sec":  total_sec,
         "distance_km":   round(total_dist / 1000, 1),
-        "traffic_aware": has_traffic,
     }
 
 
@@ -681,10 +663,7 @@ def generate_urls(optimized_stores):
 
 def run_all_drivers():
     results = {}
-
-    # ★ 始终使用当前实时时间戳，确保 Google 返回最新路况
-    dep_ts = int(_time.time())
-    print(f"[RUN_ALL] departure_time=NOW ({datetime.fromtimestamp(dep_ts).strftime('%H:%M:%S')}) ts={dep_ts}")
+    print(f"[RUN_ALL] 开始为所有司机优化路线")
 
     for driver in DRIVERS:
         try:
@@ -694,27 +673,17 @@ def run_all_drivers():
                 results[driver] = {"status": "error", "error": err}
                 continue
 
-            optimized, stats_or_err = optimize_route(stores, departure_time=int(_time.time()))
+            optimized, stats_or_err = optimize_route(stores)
             if not optimized:
                 results[driver] = {"status": "error", "error": str(stats_or_err)}
                 continue
 
             urls = generate_urls(optimized)
 
-            # ★ 精确时间格式：显示小时+分钟
             dur_sec = stats_or_err.get('duration_sec', stats_or_err.get('duration_min', 0) * 60)
             hours   = dur_sec // 3600
             mins    = (dur_sec % 3600) // 60
-            if hours > 0:
-                dur_str = f"{hours} h {mins} min"
-            else:
-                dur_str = f"{mins} min"
-
-            # 区分两种 traffic 标志：
-            #   route_optimized_with_traffic  = 路线排序时使用了实时路况矩阵（OR-Tools 输入）
-            #   duration_traffic_aware        = 最终显示的时间本身包含实时路况
-            route_opt_traffic = stats_or_err.get('traffic_aware', False)   # 来自 optimize_route
-            dur_traffic       = stats_or_err.get('traffic_aware', False)   # 来自 get_route_stats（分段请求）
+            dur_str = f"{hours} h {mins} min" if hours > 0 else f"{mins} min"
 
             results[driver] = {
                 "status":        "ok",
@@ -725,14 +694,11 @@ def run_all_drivers():
                 "duration":      dur_str,
                 "duration_sec":  dur_sec,
                 "distance":      f"{stats_or_err['distance_km']} km",
-                "traffic_aware":              dur_traffic,        # 时间是否含路况（UI 主标志）
-                "route_optimized_with_traffic": route_opt_traffic, # 排序是否用了路况
                 "unmatched":     unmatched if isinstance(unmatched, list) else [],
                 "unmatched_count": len(unmatched) if isinstance(unmatched, list) else 0,
             }
             print(f"[RUN_ALL] {driver}: {dur_str} ({dur_sec}s) "
-                  f"{stats_or_err['distance_km']}km | "
-                  f"排序路况={route_opt_traffic} 时间路况={dur_traffic}")
+                  f"{stats_or_err['distance_km']}km")
         except Exception as e:
             results[driver] = {"status": "error", "error": str(e)}
     return results
@@ -1480,8 +1446,7 @@ def api_reorder(driver_name):
           f"锁定 {len(locked_indices)} 站: {locked_names}")
 
     # ── 整体优化（含锁定约束）──────────────────────────────────
-    optimization_warning  = None
-    optimize_traffic_aware = False
+    optimization_warning = None
     locks_honored = True  # 默认认为锁定被满足（无锁定时也为 True）
 
     optimized, stats_or_err = optimize_route(
@@ -1497,28 +1462,23 @@ def api_reorder(driver_name):
         locks_honored = bool(locked_indices)  # 原样保留 = 锁定自然成立
     else:
         if isinstance(stats_or_err, dict):
-            optimize_traffic_aware = stats_or_err.get("traffic_aware", False)
             locks_honored = stats_or_err.get("locks_honored", True)
-            print(f"[REORDER] optimize_route traffic_aware={optimize_traffic_aware}, "
-                  f"locks_honored={locks_honored}")
+            print(f"[REORDER] locks_honored={locks_honored}")
 
     final = optimized
 
-    # ── 复用 optimize_route 返回的 stats，避免重复 API 请求 ────
-    # optimize_route 内部已通过 _stats_from_matrices 从距离矩阵直接计算
-    # duration/distance，无需再调 get_route_stats 发起第二次矩阵请求。
+    # ── 复用 optimize_route 返回的 stats，避免重复 OSRM 请求 ──
     # 仅在 optimize_route 失败（fallback 到原序）时才补充获取 stats。
     stats = None
     if isinstance(stats_or_err, dict) and "duration_sec" in stats_or_err:
         stats = stats_or_err
-        print(f"[REORDER] 复用 optimize_route stats: traffic_aware={stats.get('traffic_aware')}, "
+        print(f"[REORDER] 复用 optimize_route stats: "
               f"dur={stats.get('duration_sec')}s, dist={stats.get('distance_km')}km")
     else:
-        # optimize_route 失败，需要单独获取 stats
         print(f"[REORDER] Getting stats for final route ({len(final)} stores)…")
-        stats = get_route_stats(final, departure_time=int(_time.time()))
+        stats = get_route_stats(final)
         if stats:
-            print(f"[REORDER] get_route_stats returned: traffic_aware={stats.get('traffic_aware')}, "
+            print(f"[REORDER] get_route_stats: "
                   f"dur={stats.get('duration_sec')}s, dist={stats.get('distance_km')}km")
         else:
             print(f"[REORDER] get_route_stats returned None!")
@@ -1539,12 +1499,9 @@ def api_reorder(driver_name):
         r["duration"]      = f"{hours} h {mins} min" if hours > 0 else f"{mins} min"
         r["duration_sec"]  = dur_sec
         r["distance"]      = f"{stats['distance_km']} km"
-        r["traffic_aware"] = stats.get("traffic_aware", False)
-        print(f"[REORDER] Final traffic_aware={r['traffic_aware']}")
     elif not r.get("duration"):
         r["duration"] = "—"
         r["distance"] = "—"
-        r["traffic_aware"] = optimize_traffic_aware  # ★ 尝试保留 optimize 的结果
     save_state()
 
     return jsonify({
@@ -1553,7 +1510,6 @@ def api_reorder(driver_name):
         "urls":   urls,
         "duration": r.get("duration"),
         "distance": r.get("distance"),
-        "traffic_aware": r.get("traffic_aware", False),
         "locks_honored": locks_honored,
         "warning": optimization_warning,
     })
@@ -1571,18 +1527,18 @@ def api_set_emails():
 @app.route("/api/email-config", methods=["POST"])
 def api_set_email_config():
     data = request.json
-    for k in ("sender", "password", "host", "port"):
-        if k in data:
-            email_config[k] = data[k]
+    if "sender" in data:
+        email_config["sender"] = data["sender"]
     save_email_config()
     return jsonify({"ok": True})
 
 
 @app.route("/api/email-config", methods=["GET"])
 def api_get_email_config():
-    # Don't expose password
-    return jsonify({k: v if k != "password" else ("••••••" if v else "")
-                    for k, v in email_config.items()})
+    return jsonify({
+        "sender":  email_config.get("sender", ""),
+        "api_key": "••••••" if email_config.get("api_key") else "",
+    })
 
 
 @app.route("/api/send-email/<driver_name>", methods=["POST"])
